@@ -1,0 +1,21 @@
+{
+  "version": 6,
+  "files": {
+    "AGENT.md": "6b44cf9809fbc7ca437019873faf9e4d751ba0c16ac744b5eb258be61cf9cdcc",
+    "bootstrap/SOUL.md": "ccdd13b6c5988372445e0a716aa5df9007d1112979bd88aa89c5a50aea38e27a",
+    "bootstrap/USER.md": "63a7dfc7034c86f2241a03f0e8fed8b8c2d03a429d09e44143048a520b9eb949",
+    "bootstrap/TOOLS.md": "772aded282aa1267cd6e65533d22eecf8f077245ab3a5fb7ed86af7453996eea"
+  },
+  "previous": {
+    "AGENT.md": [
+      "82d59eec21b497d4c4349b69c5422ebd22920700ac1b141d3da24e732ebbf7d5"
+    ],
+    "bootstrap/TOOLS.md": [
+      "482b013c5348d8085bca919ea49d16b5b5521bd98df3802756e9dd211526669e",
+      "3be377899385d6f93b633a46d46b8044c47c393133c7f3d6c8e46976d6ea3a7c",
+      "4d8253699979238e6851be4122b798107e92e769d28412c05d3f017cb0c8fb8d",
+      "d746695f0a452235e1c70ee9b60de151ee6167906ea930d2ba1aa89994b5bfdf",
+      "07d110a55b30cb1cb9f482980e79410e091b01af9d30d10a3c7a4a5c533e5145"
+    ]
+  }
+}

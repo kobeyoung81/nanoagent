@@ -1,0 +1,46 @@
+# Build-context hygiene.
+#
+# The builder stage runs `COPY . .` to compile the Go sources, and the runtime
+# stage later copies `template/` and `runtime/` — so those two must stay in the
+# context. Everything listed here is either version control, documentation,
+# local state, or build output that no stage needs.
+
+# Version control (large, and its history has no place in an image layer)
+.git
+.gitignore
+
+# Documentation and internal working notes
+doc/
+context/
+
+# CI configuration — the image is built by Jenkins, not from the context
+.github/
+
+# Build and test output
+dist/
+configs/dev/
+*.out
+coverage.out
+coverage.html
+/nanosec
+/nanosec-*
+/nanobus
+/nanogateway
+
+# Go workspace files (per-developer; would override module resolution)
+go.work
+go.work.sum
+
+# Local state and secrets
+.env
+*.secret.json
+cli_terminal.jsonl
+
+# Editor and OS noise
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db

@@ -1,0 +1,268 @@
+package config
+
+import (
+	"fmt"
+	"log/slog"
+	"os"
+	"strconv"
+	"strings"
+	"time"
+
+	"gitee.com/kobeyoung81/nanoprotocol"
+)
+
+// LoadAgentConfig connects to the bus, fetches the "agent" and "gateway"
+// config items, and reconstructs an AgentConfig from flat key-value pairs
+// (starting from defaults). Gateway items are read for `channels.<name>.<cap>`
+// capability overrides.
+func LoadAgentConfig(busURL string) (AgentConfig, error) {
+	cfg := DefaultAgentConfig()
+
+	client, err := nanoprotocol.NewClient(busURL, nanoprotocol.WithToken(InternalToken()))
+	if err != nil {
+		return AgentConfig{}, fmt.Errorf("connect to bus: %w", err)
+	}
+	defer client.Close()
+
+	items, err := client.GetConfigItems("agent")
+	if err != nil {
+		return AgentConfig{}, fmt.Errorf("get agent config items: %w", err)
+	}
+
+	m := configItemsToMap(items)
+	applyAgentConfig(&cfg, m)
+
+	gwItems, err := client.GetConfigItems("gateway")
+	if err == nil {
+		applyChannelCapabilities(&cfg, configItemsToMap(gwItems))
+	} else {
+		slog.Warn("failed to load gateway config for channel capabilities", "error", err)
+	}
+
+	return cfg, nil
+}
+
+// applyChannelCapabilities merges `channels.<name>.<cap>` overrides into the
+// default capability map.
+func applyChannelCapabilities(cfg *AgentConfig, m map[string]string) {
+	for name, def := range cfg.Channels {
+		cap := def
+		if v, ok := m["channels."+name+".streaming"]; ok && v != "" {
+			cap.Streaming = v == "true"
+		}
+		if v, ok := m["channels."+name+".markdown"]; ok && v != "" {
+			cap.Markdown = v == "true"
+		}
+		if v, ok := m["channels."+name+".richMedia"]; ok && v != "" {
+			cap.RichMedia = v == "true"
+		}
+		if v, ok := m["channels."+name+".interactive"]; ok && v != "" {
+			cap.Interactive = v == "true"
+		}
+		if v, ok := m["channels."+name+".asyncReplies"]; ok && v != "" {
+			cap.AsyncReplies = v == "true"
+		}
+		if v, ok := m["channels."+name+".sessionResetSupported"]; ok && v != "" {
+			cap.SessionResetSupported = v == "true"
+		}
+		if v, ok := m["channels."+name+".maxContentLen"]; ok && v != "" {
+			if n, err := strconv.Atoi(v); err == nil {
+				cap.MaxContentLen = n
+			}
+		}
+		cfg.Channels[name] = cap
+	}
+}
+
+func configItemsToMap(items []nanoprotocol.ConfigItem) map[string]string {
+	m := make(map[string]string, len(items))
+	for _, item := range items {
+		m[item.Key] = item.Value
+	}
+	return m
+}
+
+func applyAgentConfig(cfg *AgentConfig, m map[string]string) {
+	if v := m["agent.maxIterations"]; v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Agent.MaxIterations = n
+		}
+	}
+	if v := m["agent.maxToolResultChars"]; v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Agent.MaxToolResultChars = n
+		}
+	}
+	if v := m["agent.summarizeTokenPercent"]; v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Agent.SummarizeTokenPercent = n
+		}
+	}
+	if v := m["agent.summarizeMessageThreshold"]; v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Agent.SummarizeMessageThreshold = n
+		}
+	}
+	if v := m["agent.titleRefreshMessages"]; v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Agent.TitleRefreshMessages = n
+		}
+	}
+	if v := m["agent.scheduledTaskMode"]; v != "" {
+		cfg.Agent.ScheduledTaskMode = v
+	}
+	if v := m["agent.language.default"]; v != "" {
+		cfg.Agent.LanguageDefault = v
+	}
+	if v := m["agent.memoryRecentDays"]; v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Agent.MemoryRecentDays = n
+		}
+	}
+	if v := m["agent.llmStreamIdleTimeout"]; v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.Agent.LLMStreamIdleTimeout = d
+		}
+	}
+	if v := m["agent.llmTtfbTimeout"]; v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.Agent.LLMTtfbTimeout = d
+		}
+	}
+	if v := m["agent.llmRequestTimeout"]; v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.Agent.LLMRequestTimeout = d
+		}
+	}
+	if v := m["agent.llmMaxRetries"]; v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Agent.LLMMaxRetries = n
+		}
+	}
+	if v := m["agent.llmSummarizeReasoningEffort"]; v != "" {
+		cfg.Agent.LLMSummarizeReasoningEffort = v
+	}
+	if v := m["agent.llmSubagentReasoningEffort"]; v != "" {
+		cfg.Agent.LLMSubagentReasoningEffort = v
+	}
+	if v := m["agent.sessionSyncEnabled"]; v != "" {
+		cfg.Agent.SessionSyncEnabled = v == "true"
+	}
+	if v := m["agent.sessionSyncFlushInterval"]; v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.Agent.SessionSyncFlushInterval = d
+		}
+	}
+	if v := m["tools.restrictToWorkspace"]; v != "" {
+		cfg.Tools.RestrictToWorkspace = v == "true"
+	}
+	if v := m["tools.shell.timeout"]; v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.Tools.Shell.Timeout = d
+		}
+	}
+	if v := m["media.corpID"]; v != "" {
+		cfg.Media.CorpID = v
+	}
+	if v := m["media.corpSecret"]; v != "" {
+		cfg.Media.CorpSecret = v
+	}
+	if v := m["media.agentID"]; v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			cfg.Media.AgentID = n
+		}
+	}
+	if v := m["paths.dataRoot"]; v != "" {
+		cfg.Paths.DataRoot = v
+	}
+	if v := m["paths.sessionDir"]; v != "" {
+		cfg.Paths.SessionDir = v
+	}
+	if v := m["paths.cronFile"]; v != "" {
+		cfg.Paths.CronFile = v
+	}
+	if v := m["paths.mediaBaseDir"]; v != "" {
+		cfg.Paths.MediaBaseDir = v
+	}
+	if v := m["paths.workspaceDir"]; v != "" {
+		cfg.Paths.WorkspaceDir = v
+	}
+	if v := m["paths.identityFile"]; v != "" {
+		cfg.Paths.IdentityFile = v
+	}
+	if v := m["paths.bootstrapDir"]; v != "" {
+		cfg.Paths.BootstrapDir = v
+	}
+	if v := m["paths.memoryDir"]; v != "" {
+		cfg.Paths.MemoryDir = v
+	}
+	if v := m["paths.skillsDir"]; v != "" {
+		cfg.Paths.SkillsDir = v
+	}
+}
+
+// ResolveAgentSettings merges config items for a specific agent using layering:
+//
+//	agent.default.<setting>  → base for all agents
+//	agent.<setting>          → direct (legacy) override
+//	agent.<id>.<setting>     → per-agent override (highest priority)
+//
+// The returned map uses the flat "agent.<setting>" key format consumed by
+// applyAgentConfig.
+func ResolveAgentSettings(items []nanoprotocol.ConfigItem, agentID string) map[string]string {
+	merged := make(map[string]string)
+	direct := make(map[string]string)
+	for _, item := range items {
+		switch {
+		case strings.HasPrefix(item.Key, "agent.default."):
+			merged["agent."+strings.TrimPrefix(item.Key, "agent.default.")] = item.Value
+		case strings.HasPrefix(item.Key, "agent."+agentID+"."):
+			direct["agent."+strings.TrimPrefix(item.Key, "agent."+agentID+".")] = item.Value
+		default:
+			direct[item.Key] = item.Value
+		}
+	}
+	for k, v := range direct {
+		merged[k] = v
+	}
+	return merged
+}
+
+// BuildAgentConfigFor returns the effective AgentConfig for a specific agent,
+// layered over the given base config.
+func BuildAgentConfigFor(base AgentConfig, items []nanoprotocol.ConfigItem, agentID string) AgentConfig {
+	cfg := base
+	applyAgentConfig(&cfg, ResolveAgentSettings(items, agentID))
+	return cfg
+}
+
+// ResolveBusURL returns the bus URL from the flag value, the
+// NANOSEC_AGENT_BUS_URL environment variable, or DefaultBusURL.
+func ResolveBusURL(flagValue string) string {
+	if flagValue != "" {
+		return flagValue
+	}
+	if env := os.Getenv("NANOSEC_AGENT_BUS_URL"); env != "" {
+		return env
+	}
+	return DefaultBusURL
+}
+
+// InternalToken returns the shared token the bus requires on its internal
+// endpoints. It comes from the environment rather than the config items: the
+// agent needs it before it can reach the bus at all, and every process of one
+// platform holds the same value.
+func InternalToken() string {
+	return strings.TrimSpace(os.Getenv("NANOSEC_BUS_INTERNAL_TOKEN"))
+}
+
+// ValidateAgentConfig checks that required agent configuration fields are set.
+func ValidateAgentConfig(cfg AgentConfig) error {
+	if cfg.Provider.APIKey == "" {
+		return fmt.Errorf("provider API key is required")
+	}
+	if cfg.Agent.MaxIterations <= 0 {
+		return fmt.Errorf("max iterations must be positive")
+	}
+	return nil
+}
