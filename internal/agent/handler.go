@@ -122,7 +122,7 @@ func (h *AgentHandler) rememberMessage(msg *nanoprotocol.InboundMessage) {
 func (h *AgentHandler) reloadConfig(keys []string) {
 	slog.Info("reloading config", "agent_id", h.ID, "keys", keys)
 
-	items, err := h.busClient.GetConfigItems("agent")
+	items, err := config.FetchItems("agent")
 	if err != nil {
 		slog.Warn("reload config: get items failed", "agent_id", h.ID, "error", err)
 		return

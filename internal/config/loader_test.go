@@ -10,45 +10,86 @@ import (
 	"gitee.com/kobeyoung81/nanoprotocol"
 )
 
-// TestLoadAgentConfig_PresentsInternalToken pins the regression that took the
-// agents offline: the bus refuses its internal endpoints to anonymous callers,
-// and LoadAgentConfig is the agent's first bus call. If this client forgets the
-// shared token, every agent container exits on startup with 401 and never
-// registers its hypervisor tunnel.
-func TestLoadAgentConfig_PresentsInternalToken(t *testing.T) {
-	t.Setenv("NANOSEC_BUS_INTERNAL_TOKEN", "s3cret")
-
-	var (
-		mu      sync.Mutex
-		gotAuth []string
-	)
-	bus := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+// adminStub serves one component's items and records the Authorization header.
+func adminStub(t *testing.T, items map[string][]nanoprotocol.ConfigItem, wantToken string) (*httptest.Server, *[]string) {
+	t.Helper()
+	var mu sync.Mutex
+	var gotAuth []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		gotAuth = append(gotAuth, r.Header.Get("Authorization"))
 		mu.Unlock()
 
-		resp, err := nanoprotocol.NewMessage(nanoprotocol.TypeConfigItems, nanoprotocol.GetConfigItemsResponse{})
-		if err != nil {
-			t.Errorf("build response: %v", err)
-			w.WriteHeader(http.StatusInternalServerError)
+		if wantToken != "" && r.Header.Get("Authorization") != "Bearer "+wantToken {
+			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(resp)
+		var component string
+		// /api/v1/config/{component}
+		for _, part := range splitPath(r.URL.Path) {
+			component = part
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"component_type": component,
+			"items":          items[component],
+		})
 	}))
-	defer bus.Close()
+	t.Cleanup(srv.Close)
+	return srv, &gotAuth
+}
 
-	if _, err := LoadAgentConfig(bus.URL); err != nil {
+func splitPath(p string) []string {
+	var out []string
+	cur := ""
+	for _, r := range p {
+		if r == '/' {
+			if cur != "" {
+				out = append(out, cur)
+			}
+			cur = ""
+			continue
+		}
+		cur += string(r)
+	}
+	if cur != "" {
+		out = append(out, cur)
+	}
+	return out
+}
+
+// The admin module refuses anonymous callers exactly like the bus did. This
+// pins the regression that once took every agent offline: forgetting the shared
+// token makes the agent exit on startup with 401 and never register its tunnel.
+func TestLoadAgentConfig_PresentsInternalToken(t *testing.T) {
+	t.Setenv("NANOSEC_BUS_INTERNAL_TOKEN", "s3cret")
+	srv, gotAuth := adminStub(t, map[string][]nanoprotocol.ConfigItem{
+		"agent":   {{Key: "agent.language.default", Value: "zh"}},
+		"gateway": {},
+	}, "s3cret")
+
+	if _, err := LoadAgentConfig(srv.URL); err != nil {
 		t.Fatalf("LoadAgentConfig: %v", err)
 	}
-
-	mu.Lock()
-	defer mu.Unlock()
-	if len(gotAuth) == 0 {
-		t.Fatal("LoadAgentConfig made no bus request")
+	if len(*gotAuth) == 0 {
+		t.Fatal("LoadAgentConfig made no admin request")
 	}
-	for i, auth := range gotAuth {
+	for _, auth := range *gotAuth {
 		if auth != "Bearer s3cret" {
-			t.Errorf("request %d Authorization = %q, want %q", i, auth, "Bearer s3cret")
+			t.Fatalf("Authorization = %q, want the shared token", auth)
 		}
+	}
+}
+
+// A refused read must surface as an error, not as an empty configuration: the
+// agent would otherwise run on defaults with no trace of why.
+func TestFetchItemsRejectsNon200(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	if _, err := fetchItemsFrom(srv.URL, "agent", 0); err == nil {
+		t.Fatal("a 503 was accepted as an empty configuration")
 	}
 }

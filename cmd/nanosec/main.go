@@ -72,7 +72,7 @@ func newHypervisorCmd() *cobra.Command {
 			}
 
 			resolvedBusURL := config.ResolveBusURL(busURL)
-			cfg, err := config.LoadAgentConfig(resolvedBusURL)
+			cfg, err := config.LoadAgentConfig(config.AdminURL())
 			if err != nil {
 				return fmt.Errorf("load config: %w", err)
 			}
@@ -196,7 +196,7 @@ func newAgentCmd() *cobra.Command {
 // runAgent builds and runs a single agent, polling its own inbound queue.
 func runAgent(userID string, bindingID int64, agentID, busURL string, readyFD int) error {
 	resolvedBusURL := config.ResolveBusURL(busURL)
-	cfg, err := config.LoadAgentConfig(resolvedBusURL)
+	cfg, err := config.LoadAgentConfig(config.AdminURL())
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}

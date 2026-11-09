@@ -29,7 +29,6 @@ type BusClient interface {
 	PostOutboundChunk(chunk nanoprotocol.OutboundChunk) error
 	PostOutboundComplete(complete nanoprotocol.OutboundComplete) error
 	ListAgents(userID string) ([]nanoprotocol.AgentRecord, error)
-	GetConfigItems(componentType string) ([]nanoprotocol.ConfigItem, error)
 	ConfigChanges() <-chan nanoprotocol.ConfigChange
 	SaveSession(req nanoprotocol.SaveSessionRequest) error
 	SetAgentPermission(req nanoprotocol.SetAgentPermissionRequest) error
@@ -546,7 +545,7 @@ func (a *Agent) postSummaryChunk(ref *messageRef, messageID, content string) {
 // mode; the router path uses AgentHandler.reloadConfig).
 func (a *Agent) reloadConfig() {
 	slog.Info("reloading config", "agent", a.config.AgentID)
-	items, err := a.busClient.GetConfigItems("agent")
+	items, err := config.FetchItems("agent")
 	if err != nil {
 		slog.Warn("reload config: get items failed", "agent", a.config.AgentID, "error", err)
 		return

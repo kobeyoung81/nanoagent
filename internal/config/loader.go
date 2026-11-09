@@ -11,35 +11,52 @@ import (
 	"gitee.com/kobeyoung81/nanoprotocol"
 )
 
-// LoadAgentConfig connects to the bus, fetches the "agent" and "gateway"
-// config items, and reconstructs an AgentConfig from flat key-value pairs
-// (starting from defaults). Gateway items are read for `channels.<name>.<cap>`
-// capability overrides.
-func LoadAgentConfig(busURL string) (AgentConfig, error) {
+// LoadAgentConfig fetches the "agent" and "gateway" config items from the admin
+// module and reconstructs an AgentConfig from the flat key-value pairs (starting
+// from defaults). Gateway items are read for `channels.<name>.<cap>` capability
+// overrides.
+//
+// It retries briefly: the container is often started a moment before admin is
+// reachable, and a hard failure there would leave the agent on defaults for its
+// whole life. Running on defaults after ~30s is logged and reported, so a real
+// outage is visible rather than silent.
+func LoadAgentConfig(adminURL string) (AgentConfig, error) {
 	cfg := DefaultAgentConfig()
 
-	client, err := nanoprotocol.NewClient(busURL, nanoprotocol.WithToken(InternalToken()))
-	if err != nil {
-		return AgentConfig{}, fmt.Errorf("connect to bus: %w", err)
-	}
-	defer client.Close()
-
-	items, err := client.GetConfigItems("agent")
+	items, err := fetchWithRetry(adminURL, "agent")
 	if err != nil {
 		return AgentConfig{}, fmt.Errorf("get agent config items: %w", err)
 	}
+	applyAgentConfig(&cfg, configItemsToMap(items))
 
-	m := configItemsToMap(items)
-	applyAgentConfig(&cfg, m)
-
-	gwItems, err := client.GetConfigItems("gateway")
-	if err == nil {
-		applyChannelCapabilities(&cfg, configItemsToMap(gwItems))
-	} else {
+	gwItems, err := fetchWithRetry(adminURL, "gateway")
+	if err != nil {
 		slog.Warn("failed to load gateway config for channel capabilities", "error", err)
+	} else {
+		applyChannelCapabilities(&cfg, configItemsToMap(gwItems))
 	}
 
 	return cfg, nil
+}
+
+// fetchWithRetry retries 1s, 2s, 4s, 8s, 8s, 8s — about 31 seconds.
+func fetchWithRetry(adminURL, component string) ([]nanoprotocol.ConfigItem, error) {
+	delays := []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 8 * time.Second, 8 * time.Second}
+	var lastErr error
+	for attempt, delay := range append([]time.Duration{0}, delays...) {
+		if delay > 0 {
+			time.Sleep(delay)
+		}
+		items, err := fetchItemsFrom(adminURL, component, 5*time.Second)
+		if err == nil {
+			if attempt > 0 {
+				slog.Info("admin config became reachable", "component", component, "attempts", attempt+1)
+			}
+			return items, nil
+		}
+		lastErr = err
+	}
+	return nil, lastErr
 }
 
 // applyChannelCapabilities merges `channels.<name>.<cap>` overrides into the
