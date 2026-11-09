@@ -37,7 +37,7 @@ This document provides specifications for each Go package across all MyriadMind 
 
 ### `cmd/nanobus` — CLI
 
-CLI commands: `nanobus` (serve), `nanobus version`, `nanobus user add|list|link`, `nanobus config seed|get|set`, `nanobus migrate up|status`
+CLI commands: `nanobus` (serve), `nanobus version`, `nanobus user add|list|link`, `nanobus config get`（写与种子已迁到 `nanoadmin config seed`）, `nanobus migrate up|status`
 
 ### `internal/server` — WebSocket Server
 
