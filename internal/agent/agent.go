@@ -23,14 +23,17 @@ import (
 )
 
 // BusClient defines the interface for bus communication.
+// SessionSink writes the conversation projection.
+type SessionSink interface {
+	SaveSession(req nanoprotocol.SaveSessionRequest) error
+}
+
 type BusClient interface {
 	PollInbound(userID string, bindingID int64, agentID string) (*nanoprotocol.InboundMessage, error)
 	PostOutbound(msg nanoprotocol.OutboundMessage) error
 	PostOutboundChunk(chunk nanoprotocol.OutboundChunk) error
 	PostOutboundComplete(complete nanoprotocol.OutboundComplete) error
-	ListAgents(userID string) ([]nanoprotocol.AgentRecord, error)
 	ConfigChanges() <-chan nanoprotocol.ConfigChange
-	SaveSession(req nanoprotocol.SaveSessionRequest) error
 	SetAgentPermission(req nanoprotocol.SetAgentPermissionRequest) error
 	Close() error
 }
@@ -182,13 +185,32 @@ type Agent struct {
 }
 
 // New creates a new agent instance.
-func New(cfg Config, client BusClient, p provider.Provider, t *tool.Registry) (*Agent, error) {
+// Option configures the parts of an Agent that are not its message plane.
+type Option func(*agentOptions)
+
+type agentOptions struct {
+	sessions SessionSink
+}
+
+// WithSessionSink sets where conversation snapshots are written. Without one the
+// agent keeps its JSONL copy only, which is what the tests exercise.
+func WithSessionSink(sink SessionSink) Option {
+	return func(o *agentOptions) { o.sessions = sink }
+}
+
+func New(cfg Config, client BusClient, p provider.Provider, t *tool.Registry, opts ...Option) (*Agent, error) {
+	var options agentOptions
+	for _, opt := range opts {
+		opt(&options)
+	}
 	store, err := session.NewStore(cfg.SessionDir)
 	if err != nil {
 		return nil, fmt.Errorf("create session store: %w", err)
 	}
 
-	store.SetSyncer(cfg.AgentID, newBusSessionSyncer(client, cfg.UserID))
+	if options.sessions != nil {
+		store.SetSyncer(cfg.AgentID, newBusSessionSyncer(options.sessions, cfg.UserID))
+	}
 	if !cfg.SessionSyncEnabled {
 		store.SetSyncEnabled(false)
 	}
@@ -619,7 +641,8 @@ func (a *Agent) emitStatusTo(ref *messageRef, event, state string) {
 	}
 }
 
-// busSessionSyncer persists session snapshots to the bus.
+// SessionSink applies one snapshot to the conversation projection. The portal
+// owns it; the syncer does not care which service answers.
 //
 // It sends only the messages the bus has not acknowledged yet. Within a segment
 // the conversation is append-only, so "what is new" is a suffix — and sending the
@@ -630,14 +653,14 @@ func (a *Agent) emitStatusTo(ref *messageRef, event, state string) {
 // never written to again (compaction starts a new session id), and losing the map
 // to a restart costs one full snapshot.
 type busSessionSyncer struct {
-	client    BusClient
+	client    SessionSink
 	accountID string
 
 	mu    sync.Mutex
 	acked map[string]int
 }
 
-func newBusSessionSyncer(client BusClient, accountID string) *busSessionSyncer {
+func newBusSessionSyncer(client SessionSink, accountID string) *busSessionSyncer {
 	return &busSessionSyncer{client: client, accountID: accountID, acked: map[string]int{}}
 }
 

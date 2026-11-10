@@ -18,6 +18,7 @@ import (
 	"gitee.com/kobeyoung81/nanosec/internal/agent"
 	"gitee.com/kobeyoung81/nanosec/internal/capability"
 	"gitee.com/kobeyoung81/nanosec/internal/config"
+	"gitee.com/kobeyoung81/nanosec/internal/portalclient"
 	"gitee.com/kobeyoung81/nanosec/internal/skillstore"
 )
 
@@ -30,12 +31,20 @@ const (
 	readyFD = 3
 )
 
+// AgentDirectory is the agent list and status the supervisor works from. The
+// portal owns those rows; the bus no longer serves them over the protocol.
+type AgentDirectory interface {
+	ListAgents(userID string) ([]portalclient.Agent, error)
+	SetAgentStatus(agentID, status string) error
+}
+
 // Supervisor spawns and supervises one child process per active agent.
 type Supervisor struct {
 	userID    string
 	bindingID int64
 	busURL    string
 	bus       *nanoprotocol.Client
+	agents    AgentDirectory
 
 	// paths/dataRoot locate each agent home so the supervisor can materialize
 	// catalog skills before spawning the agent process.
@@ -54,12 +63,13 @@ type child struct {
 }
 
 // New creates a Supervisor for a user.
-func New(userID string, bindingID int64, busURL string, bus *nanoprotocol.Client) *Supervisor {
+func New(userID string, bindingID int64, busURL string, bus *nanoprotocol.Client, agents AgentDirectory) *Supervisor {
 	return &Supervisor{
 		userID:    userID,
 		bindingID: bindingID,
 		busURL:    busURL,
 		bus:       bus,
+		agents:    agents,
 		children:  make(map[string]*child),
 	}
 }
@@ -102,7 +112,7 @@ func (s *Supervisor) prepare(agentID string) {
 // reprepare re-materializes skills for every wanted agent after a capability
 // change (skill, attachment, or agent-type edits).
 func (s *Supervisor) reprepare() {
-	agents, err := s.bus.ListAgents(s.userID)
+	agents, err := s.agents.ListAgents(s.userID)
 	if err != nil {
 		slog.Warn("reprepare: list agents failed", "error", err)
 		return
@@ -180,7 +190,7 @@ func (s *Supervisor) Run(ctx context.Context) error {
 // reconcile ensures a child process exists for every non-deleted/non-suspended/
 // non-failed agent and terminates children for agents that are gone.
 func (s *Supervisor) reconcile() {
-	agents, err := s.bus.ListAgents(s.userID)
+	agents, err := s.agents.ListAgents(s.userID)
 	if err != nil {
 		slog.Error("list agents", "error", err)
 		return
@@ -205,7 +215,7 @@ func (s *Supervisor) reconcile() {
 			slog.Info("stopping agent process", "agent_id", id)
 			_ = c.cmd.Process.Kill()
 			delete(s.children, id)
-			_ = s.bus.UpdateAgentStatus(s.userID, id, "stopped")
+			_ = s.agents.SetAgentStatus(id, "stopped")
 		}
 	}
 }
@@ -251,16 +261,16 @@ func (s *Supervisor) spawn(agentID string) {
 	exe, err := os.Executable()
 	if err != nil {
 		slog.Error("resolve executable", "error", err)
-		_ = s.bus.UpdateAgentStatus(s.userID, agentID, "failed")
+		_ = s.agents.SetAgentStatus(agentID, "failed")
 		return
 	}
 
-	_ = s.bus.UpdateAgentStatus(s.userID, agentID, "spawning")
+	_ = s.agents.SetAgentStatus(agentID, "spawning")
 
 	readyR, readyW, err := os.Pipe()
 	if err != nil {
 		slog.Error("create ready pipe", "error", err)
-		_ = s.bus.UpdateAgentStatus(s.userID, agentID, "failed")
+		_ = s.agents.SetAgentStatus(agentID, "failed")
 		return
 	}
 
@@ -278,7 +288,7 @@ func (s *Supervisor) spawn(agentID string) {
 		slog.Error("start agent process", "agent_id", agentID, "error", err)
 		readyR.Close()
 		readyW.Close()
-		_ = s.bus.UpdateAgentStatus(s.userID, agentID, "failed")
+		_ = s.agents.SetAgentStatus(agentID, "failed")
 		return
 	}
 	readyW.Close() // parent keeps only the read end
@@ -300,7 +310,7 @@ func (s *Supervisor) supervise(c *child) {
 		n, _ := c.ready.Read(buf)
 		if n > 0 {
 			slog.Info("agent ready", "agent_id", c.agentID)
-			_ = s.bus.UpdateAgentStatus(s.userID, c.agentID, "running")
+			_ = s.agents.SetAgentStatus(c.agentID, "running")
 		}
 	}()
 
@@ -345,7 +355,7 @@ func (s *Supervisor) supervise(c *child) {
 // (not deleted/suspended/failed). On a bus error it is permissive so a
 // transient outage cannot permanently stop a wanted agent.
 func (s *Supervisor) stillWanted(agentID string) bool {
-	agents, err := s.bus.ListAgents(s.userID)
+	agents, err := s.agents.ListAgents(s.userID)
 	if err != nil {
 		return true
 	}
@@ -367,7 +377,7 @@ func (s *Supervisor) stopAll() {
 	defer s.mu.Unlock()
 	for id, c := range s.children {
 		_ = c.cmd.Process.Kill()
-		_ = s.bus.UpdateAgentStatus(s.userID, id, "stopped")
+		_ = s.agents.SetAgentStatus(id, "stopped")
 	}
 	s.children = make(map[string]*child)
 }

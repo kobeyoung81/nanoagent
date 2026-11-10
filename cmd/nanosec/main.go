@@ -21,6 +21,7 @@ import (
 	"gitee.com/kobeyoung81/nanosec/internal/gitsvc"
 	"gitee.com/kobeyoung81/nanosec/internal/hypervisor"
 	nanoseclog "gitee.com/kobeyoung81/nanosec/internal/log"
+	"gitee.com/kobeyoung81/nanosec/internal/portalclient"
 	"gitee.com/kobeyoung81/nanosec/internal/provider"
 	"gitee.com/kobeyoung81/nanosec/internal/question"
 	"gitee.com/kobeyoung81/nanosec/internal/skill"
@@ -87,6 +88,10 @@ func newHypervisorCmd() *cobra.Command {
 			}
 			defer client.Close()
 
+			// The agent rows and the conversation projection are the portal's;
+			// the bus carries messages only.
+			agents := portalclient.New(config.PortalURL(), config.InternalToken())
+
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 
@@ -101,7 +106,7 @@ func newHypervisorCmd() *cobra.Command {
 			if addr != "" {
 				hy := hypervisor.NewServer(addr).SetDataRoot(paths.DataRoot)
 				terminals := hypervisor.NewTerminalManager(paths.DataRoot)
-				homeResolver := newHomeResolver(client, userID, paths.DataRoot)
+				homeResolver := newHomeResolver(agents, userID, paths.DataRoot)
 				hy.SetHomeResolver(homeResolver)
 				hy.SetGitService(gitsvc.New(paths.DataRoot, 55*time.Second))
 				terminals.SetHomeResolver(homeResolver)
@@ -119,7 +124,7 @@ func newHypervisorCmd() *cobra.Command {
 				go tun.Run(ctx)
 			}
 
-			sup := hypervisor.New(userID, bindingID, resolvedBusURL, client)
+			sup := hypervisor.New(userID, bindingID, resolvedBusURL, client, agents)
 			sup.SetPaths(cfg.Paths, paths.DataRoot)
 			return sup.Run(ctx)
 		},
@@ -138,7 +143,7 @@ func newHypervisorCmd() *cobra.Command {
 // hypervisor bridge and terminal manager (they only see agent IDs, not agent
 // records). The registry is the authority; the display name used to derive a
 // folder for an unregistered agent is fetched through the bus and cached.
-func newHomeResolver(client *nanoprotocol.Client, userID, dataRoot string) func(string) string {
+func newHomeResolver(agents *portalclient.Client, userID, dataRoot string) func(string) string {
 	index := workspace.NewHomesIndex(dataRoot)
 	var mu sync.Mutex
 	names := map[string]string{} // agentID -> displayName
@@ -147,7 +152,7 @@ func newHomeResolver(client *nanoprotocol.Client, userID, dataRoot string) func(
 		displayName := names[agentID]
 		mu.Unlock()
 		if displayName == "" {
-			if recs, err := client.ListAgents(userID); err == nil {
+			if recs, err := agents.ListAgents(userID); err == nil {
 				mu.Lock()
 				for _, r := range recs {
 					names[r.ID] = r.DisplayName
@@ -210,6 +215,9 @@ func runAgent(userID string, bindingID int64, agentID, busURL string, readyFD in
 		return fmt.Errorf("connect to bus: %w", err)
 	}
 	defer client.Close()
+
+	// Session snapshots go to the portal, which owns the conversation projection.
+	sessions := portalclient.New(config.PortalURL(), config.InternalToken())
 
 	// Fetch the full reconciler input in one round trip: the agent record
 	// (catalog model reference, thinking, MCP toggle, model roles, mode),
@@ -579,7 +587,7 @@ func runAgent(userID string, bindingID int64, agentID, busURL string, readyFD in
 		ChannelCaps:                 merged.Channels,
 	}
 
-	ag, err := agent.New(agentCfg, client, llm, buildTools(agentHome, sharedWS, nil))
+	ag, err := agent.New(agentCfg, client, llm, buildTools(agentHome, sharedWS, nil), agent.WithSessionSink(sessions))
 	if err != nil {
 		return fmt.Errorf("create agent %s: %w", record.ID, err)
 	}
