@@ -326,7 +326,7 @@ func (s *Supervisor) supervise(c *child) {
 
 	if err == nil {
 		slog.Info("agent process exited cleanly", "agent_id", c.agentID)
-		_ = s.bus.UpdateAgentStatus(s.userID, c.agentID, "stopped")
+		_ = s.agents.SetAgentStatus(c.agentID, "stopped")
 		return
 	}
 
@@ -334,7 +334,7 @@ func (s *Supervisor) supervise(c *child) {
 
 	if c.restarts.Load() >= maxRestarts {
 		slog.Error("agent failed after restart attempts", "agent_id", c.agentID, "restarts", c.restarts.Load())
-		_ = s.bus.UpdateAgentStatus(s.userID, c.agentID, "failed")
+		_ = s.agents.SetAgentStatus(c.agentID, "failed")
 		return
 	}
 
