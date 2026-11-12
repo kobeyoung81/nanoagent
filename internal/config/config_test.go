@@ -85,6 +85,27 @@ func TestResolveBusURL_Default(t *testing.T) {
 	}
 }
 
+// TestResolveTunnelURL_FallsBackToTheBusURL pins the rolling-upgrade path: a
+// deployment that does not set the tunnel address yet keeps dialing the bus.
+func TestResolveTunnelURL_FallsBackToTheBusURL(t *testing.T) {
+	os.Unsetenv("NANOSEC_AGENT_TUNNEL_URL")
+
+	if got := ResolveTunnelURL("", "ws://nanobus:9000"); got != "ws://nanobus:9000" {
+		t.Fatalf("ResolveTunnelURL() = %q, want the bus URL", got)
+	}
+}
+
+func TestResolveTunnelURL_FlagWinsOverEnvAndBus(t *testing.T) {
+	t.Setenv("NANOSEC_AGENT_TUNNEL_URL", "ws://env-tunnel:8080")
+
+	if got := ResolveTunnelURL("ws://flag-tunnel:8080", "ws://nanobus:9000"); got != "ws://flag-tunnel:8080" {
+		t.Fatalf("ResolveTunnelURL() = %q, want the flag value", got)
+	}
+	if got := ResolveTunnelURL("", "ws://nanobus:9000"); got != "ws://env-tunnel:8080" {
+		t.Fatalf("ResolveTunnelURL() = %q, want the environment value", got)
+	}
+}
+
 func TestDefaultAgentConfig_ShellTimeout(t *testing.T) {
 	cfg := DefaultAgentConfig()
 	want := 60 * time.Second

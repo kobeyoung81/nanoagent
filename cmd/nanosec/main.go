@@ -62,6 +62,7 @@ func newHypervisorCmd() *cobra.Command {
 	var userID string
 	var bindingID int64
 	var busURL string
+	var tunnelURL string
 	var addr string
 
 	cmd := &cobra.Command{
@@ -73,6 +74,7 @@ func newHypervisorCmd() *cobra.Command {
 			}
 
 			resolvedBusURL := config.ResolveBusURL(busURL)
+			resolvedTunnelURL := config.ResolveTunnelURL(tunnelURL, resolvedBusURL)
 			cfg, err := config.LoadAgentConfig(config.AdminURL())
 			if err != nil {
 				return fmt.Errorf("load config: %w", err)
@@ -118,9 +120,10 @@ func newHypervisorCmd() *cobra.Command {
 					}
 				}()
 
-				// Register a WebSocket tunnel with the bus so the portal can
-				// reach this container's HTTP bridge from any network topology.
-				tun := hypervisor.NewTunnel(userID, resolvedBusURL, addr, terminals)
+				// Register a WebSocket tunnel so the portal can reach this
+				// container's HTTP bridge from any network topology. It dials the
+				// provisioner where one is configured; the protocol is unchanged.
+				tun := hypervisor.NewTunnel(userID, resolvedTunnelURL, addr, terminals)
 				go tun.Run(ctx)
 			}
 
@@ -133,6 +136,7 @@ func newHypervisorCmd() *cobra.Command {
 	cmd.Flags().StringVar(&userID, "user", "", "User ID to supervise (required)")
 	cmd.Flags().Int64Var(&bindingID, "binding", 0, "Binding ID")
 	cmd.Flags().StringVar(&busURL, "bus-url", "", "bus URL")
+	cmd.Flags().StringVar(&tunnelURL, "tunnel-url", "", "tunnel URL (default: $NANOSEC_AGENT_TUNNEL_URL, else the bus URL)")
 	cmd.Flags().StringVar(&addr, "hypervisor-addr", ":9090", "external bridge listen address (empty disables)")
 	_ = cmd.MarkFlagRequired("user")
 

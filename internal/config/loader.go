@@ -265,6 +265,20 @@ func ResolveBusURL(flagValue string) string {
 	return DefaultBusURL
 }
 
+// ResolveTunnelURL returns where the hypervisor tunnel dials. A deployment can
+// point it at the provisioner (which now owns tunnels) while the agent keeps
+// talking to the bus for messages; an empty flag and env fall back to the bus
+// URL so an older deployment keeps working unchanged.
+func ResolveTunnelURL(flagValue, busURL string) string {
+	if flagValue != "" {
+		return flagValue
+	}
+	if env := os.Getenv("NANOSEC_AGENT_TUNNEL_URL"); env != "" {
+		return env
+	}
+	return busURL
+}
+
 // InternalToken returns the shared token the bus requires on its internal
 // endpoints. It comes from the environment rather than the config items: the
 // agent needs it before it can reach the bus at all, and every process of one
