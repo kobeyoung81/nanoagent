@@ -10,9 +10,11 @@ import (
 // nameOnly is a minimal tool used to pin the definition ordering.
 type nameOnly string
 
-func (n nameOnly) Name() string                          { return string(n) }
-func (n nameOnly) Description() string                   { return "test tool" }
-func (n nameOnly) Parameters() provider.ParameterSchema  { return provider.ParameterSchema{Type: "object"} }
+func (n nameOnly) Name() string        { return string(n) }
+func (n nameOnly) Description() string { return "test tool" }
+func (n nameOnly) Parameters() provider.ParameterSchema {
+	return provider.ParameterSchema{Type: "object"}
+}
 func (n nameOnly) Execute(context.Context, map[string]any) (string, error) { return "", nil }
 
 // TestDefinitionsOrderIsStable is the regression for the prompt-cache prefix:

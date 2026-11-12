@@ -10,7 +10,6 @@ import (
 	"gitee.com/kobeyoung81/nanosec/internal/config"
 )
 
-
 // headText renders head 1 plus the per-file segments — what the model actually
 // receives as its context sections. The session files moved out of the single
 // system prompt into one system message per file (see HeadSegments), so the
