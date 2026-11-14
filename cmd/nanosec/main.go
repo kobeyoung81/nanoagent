@@ -30,6 +30,11 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// busWS decides whether agent processes run their requests on one WebSocket
+// with the bus instead of one HTTP POST per poll. The socket is an optimisation:
+// when it is off or down, the client falls back to the poll path unchanged.
+var busWS = true
+
 // Build-time variables set via -ldflags.
 var (
 	version = "dev"
@@ -46,6 +51,8 @@ func main() {
 		Long:         `Nanosec runs per-user agent containers. The hypervisor subcommand supervises per-agent processes; the agent subcommand runs a single agent.`,
 		SilenceUsage: true,
 	}
+	rootCmd.PersistentFlags().BoolVar(&busWS, "bus-ws", true,
+		"hold one WebSocket to the bus for requests and notifications (false: poll every 500ms)")
 	rootCmd.AddCommand(newHypervisorCmd())
 	rootCmd.AddCommand(newAgentCmd())
 	rootCmd.AddCommand(newHomeCmd())
@@ -84,7 +91,10 @@ func newHypervisorCmd() *cobra.Command {
 				return fmt.Errorf("resolve paths: %w", err)
 			}
 
-			client, err := nanoprotocol.NewClient(resolvedBusURL, nanoprotocol.WithToken(config.InternalToken()))
+			client, err := connectBus(resolvedBusURL, nanoprotocol.AgentSocketRegister{
+				UserID:     userID,
+				Components: []string{nanoprotocol.SocketComponentAgents, nanoprotocol.SocketComponentConfig},
+			})
 			if err != nil {
 				return fmt.Errorf("connect to bus: %w", err)
 			}
@@ -202,6 +212,28 @@ func newAgentCmd() *cobra.Command {
 	return cmd
 }
 
+// connectBus opens the bus connection: a registered agent socket when that is
+// enabled, the plain HTTP client otherwise. A socket that cannot be opened or
+// registered is not an error — the caller gets the client it would have had.
+func connectBus(busURL string, reg nanoprotocol.AgentSocketRegister) (*nanoprotocol.Client, error) {
+	token := config.InternalToken()
+	if !busWS {
+		return nanoprotocol.NewClient(busURL, nanoprotocol.WithToken(token))
+	}
+	client, err := nanoprotocol.DialWS(busURL, nanoprotocol.WithToken(token))
+	if err != nil {
+		slog.Warn("agent socket unavailable; polling the bus", "url", busURL, "error", err)
+		return nanoprotocol.NewClient(busURL, nanoprotocol.WithToken(token))
+	}
+	if err := client.RegisterAgentSocket(reg); err != nil {
+		slog.Warn("agent socket refused; polling the bus", "url", busURL, "error", err)
+		_ = client.Close()
+		return nanoprotocol.NewClient(busURL, nanoprotocol.WithToken(token))
+	}
+	slog.Info("agent socket connected", "url", busURL, "agent_id", reg.AgentID)
+	return client, nil
+}
+
 // runAgent builds and runs a single agent, polling its own inbound queue.
 func runAgent(userID string, bindingID int64, agentID, busURL string, readyFD int) error {
 	resolvedBusURL := config.ResolveBusURL(busURL)
@@ -214,7 +246,11 @@ func runAgent(userID string, bindingID int64, agentID, busURL string, readyFD in
 		return fmt.Errorf("resolve root paths: %w", err)
 	}
 
-	client, err := nanoprotocol.NewClient(resolvedBusURL, nanoprotocol.WithToken(config.InternalToken()))
+	client, err := connectBus(resolvedBusURL, nanoprotocol.AgentSocketRegister{
+		UserID:     userID,
+		AgentID:    agentID,
+		Components: []string{nanoprotocol.SocketComponentConfig},
+	})
 	if err != nil {
 		return fmt.Errorf("connect to bus: %w", err)
 	}

@@ -22,6 +22,13 @@ import (
 	"github.com/google/uuid"
 )
 
+// Polling cadence. The socket turns the poll into a safety net for a notice
+// that never arrived; without it the poll is the only source of work.
+const (
+	socketPollInterval   = 5 * time.Second
+	fallbackPollInterval = 500 * time.Millisecond
+)
+
 // BusClient defines the interface for bus communication.
 // SessionSink writes the conversation projection.
 type SessionSink interface {
@@ -882,6 +889,25 @@ func (a *Agent) applyModeSettings(spec ResolvedAgent) {
 	}
 }
 
+// pollInterval is how long to wait between polls when no push arrives: the
+// socket makes polling a safety net, so it can be slow; without one it is the
+// only source of work.
+func (a *Agent) pollInterval() time.Duration {
+	if s, ok := a.busClient.(interface{ SocketConnected() bool }); ok && s.SocketConnected() {
+		return socketPollInterval
+	}
+	return fallbackPollInterval
+}
+
+// inboundReady is the bus's "work arrived" signal, or nil when the client has
+// no socket (selecting on nil blocks forever, which is what we want).
+func (a *Agent) inboundReady() <-chan struct{} {
+	if s, ok := a.busClient.(interface{ InboundReady() <-chan struct{} }); ok {
+		return s.InboundReady()
+	}
+	return nil
+}
+
 // Run starts the agent loop.
 func (a *Agent) Run(ctx context.Context) error {
 	slog.Info("agent started",
@@ -892,8 +918,12 @@ func (a *Agent) Run(ctx context.Context) error {
 	defer a.busClient.Close()
 	defer a.sessions.Close()
 
-	ticker := time.NewTicker(500 * time.Millisecond)
+	// With an agent socket the bus says when work arrives, so the fallback poll
+	// only has to catch a notice that never made it. Without one, the poll is the
+	// only way to learn about work and keeps the old cadence.
+	ticker := time.NewTicker(a.pollInterval())
 	defer ticker.Stop()
+	ready := a.inboundReady()
 
 	changeCh := a.busClient.ConfigChanges()
 
@@ -901,6 +931,10 @@ func (a *Agent) Run(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case <-ready:
+			// A push says a message is waiting: claim it now instead of at the
+			// next tick. The tick keeps its period, so this cannot starve it.
+			ticker.Reset(time.Millisecond)
 		case change, ok := <-changeCh:
 			if !ok {
 				changeCh = nil
@@ -913,6 +947,7 @@ func (a *Agent) Run(ctx context.Context) error {
 			}
 			a.handleChange(ctx, change)
 		case <-ticker.C:
+			ticker.Reset(a.pollInterval())
 			// Poll for inbound message routed to this agent.
 			msg, err := a.busClient.PollInbound(a.config.UserID, a.config.BindingID, a.config.AgentID)
 			if err != nil {
