@@ -424,3 +424,22 @@ func TestFilesDeleteFolderRecursively(t *testing.T) {
 		t.Fatalf("expected folder removed recursively, stat err = %v", err)
 	}
 }
+
+// A directory the browser remembered can be gone (a re-provisioned agent, a
+// deleted folder). The file panel recovers from a 404, so this must not look like
+// a server failure.
+func TestListFilesMissingDirectoryIs404(t *testing.T) {
+	server := newTestServer(t)
+	home := filepath.Join(server.dataRoot, "agents", "agent-1")
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	list := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/files/agent-1?path=workspace/gone", nil)
+	req.SetPathValue("agentID", "agent-1")
+	server.handleListFiles(list, req)
+	if list.Code != http.StatusNotFound {
+		t.Fatalf("list of a missing directory: expected 404, got %d: %s", list.Code, list.Body.String())
+	}
+}

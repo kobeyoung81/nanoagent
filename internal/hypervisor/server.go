@@ -235,6 +235,13 @@ func (s *Server) handleListFiles(w http.ResponseWriter, r *http.Request) {
 
 	entries, err := readDirEntries(resolved, defaultRuntimeEntries)
 	if err != nil {
+		// A remembered directory can be gone (the agent was re-provisioned, a
+		// folder was deleted). That is the caller's fact, not a server failure:
+		// the browser's file panel keys its "go back home" recovery off a 404.
+		if os.IsNotExist(err) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such directory"})
+			return
+		}
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}

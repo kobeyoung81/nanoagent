@@ -70,7 +70,9 @@ func (c *Client) ListAgents(userID string) ([]Agent, error) {
 	var out struct {
 		Agents []Agent `json:"agents"`
 	}
-	path := "/internal/v1/agents?user_id=" + strings.TrimSpace(urlEscape(userID))
+	// include_deleted: the supervisor must see a deleted agent (it skips it and
+	// must not resurrect it), unlike the browser's own list.
+	path := "/internal/v1/agents?include_deleted=1&user_id=" + strings.TrimSpace(urlEscape(userID))
 	if err := c.get(context.Background(), path, &out); err != nil {
 		return nil, err
 	}
