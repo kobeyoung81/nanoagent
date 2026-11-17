@@ -3,7 +3,7 @@ module gitee.com/kobeyoung81/nanosec
 go 1.24.0
 
 require (
-	gitee.com/kobeyoung81/nanoprotocol v0.46.0
+	gitee.com/kobeyoung81/nanoprotocol v0.47.0
 	github.com/spf13/cobra v1.8.1
 )
 
