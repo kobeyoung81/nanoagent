@@ -116,6 +116,7 @@ func newHypervisorCmd() *cobra.Command {
 			}()
 
 			if addr != "" {
+				hypervisor.Version = version
 				hy := hypervisor.NewServer(addr).SetDataRoot(paths.DataRoot)
 				terminals := hypervisor.NewTerminalManager(paths.DataRoot)
 				homeResolver := newHomeResolver(agents, userID, paths.DataRoot)
