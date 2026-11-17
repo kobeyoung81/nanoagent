@@ -41,6 +41,12 @@ type Tunnel struct {
 	localBase  string
 	httpClient *http.Client
 	terminals  *TerminalManager
+
+	// streams holds the requests whose bodies arrive as chunks. A request and
+	// its chunks are correlated by id, and the read loop is the only writer of
+	// this map, so one mutex guards it against cancels from the serving side.
+	streamsMu sync.Mutex
+	streams   map[string]*tunnelStream
 }
 
 // NewTunnel builds a Tunnel for the given user. busURL may be ws://, wss://,
@@ -60,11 +66,16 @@ func NewTunnel(userID, busURL, localAddr string, terminals *TerminalManager) *Tu
 	base = strings.TrimRight("http://"+base, "/")
 
 	return &Tunnel{
-		userID:     userID,
-		wsURL:      ws,
-		localBase:  base,
-		httpClient: &http.Client{Timeout: 60 * time.Second},
+		userID:    userID,
+		wsURL:     ws,
+		localBase: base,
+		// No whole-request timeout: a streamed file on a slow link is
+		// legitimate, and every call is bound to a context the tunnel cancels
+		// when the caller walks away. The header timeout still catches a stalled
+		// local bridge.
+		httpClient: &http.Client{Transport: &http.Transport{ResponseHeaderTimeout: 60 * time.Second}},
 		terminals:  terminals,
+		streams:    make(map[string]*tunnelStream),
 	}
 }
 
@@ -148,6 +159,9 @@ func (t *Tunnel) runOnce(ctx context.Context) (bool, error) {
 
 	register, err := nanoprotocol.NewMessage(nanoprotocol.TypeTunnelRegister, nanoprotocol.TunnelRegister{
 		UserID: t.userID,
+		// The relay must not send chunk frames to a hypervisor that predates
+		// them: it would ignore the chunks and answer with an empty body.
+		Features: []string{nanoprotocol.TunnelFeatureBodyStream},
 	})
 	if err != nil {
 		return false, err
@@ -173,7 +187,23 @@ func (t *Tunnel) runOnce(ctx context.Context) (bool, error) {
 				slog.Warn("tunnel request decode error", "error", err)
 				continue
 			}
-			go t.serveRequest(wrapped, req)
+			if req.Streamed {
+				t.startStreamedRequest(ctx, wrapped, req)
+				continue
+			}
+			go t.serveRequest(ctx, wrapped, req)
+		case nanoprotocol.TypeTunnelRequestBody:
+			var chunk nanoprotocol.TunnelBodyChunk
+			if err := msg.DecodePayload(&chunk); err != nil {
+				continue
+			}
+			t.deliverRequestBody(chunk)
+		case nanoprotocol.TypeTunnelCancel:
+			var cancelled nanoprotocol.TunnelCancel
+			if err := msg.DecodePayload(&cancelled); err != nil {
+				continue
+			}
+			t.cancelStream(cancelled.RequestID)
 		case nanoprotocol.TypeTunnelStreamInput:
 			var p nanoprotocol.TunnelStreamInput
 			if err := msg.DecodePayload(&p); err != nil {
@@ -224,17 +254,16 @@ func (t *Tunnel) keepalive(conn *websocket.Conn, done <-chan struct{}) {
 	}
 }
 
-// serveRequest proxies a tunnel_request to the local HTTP bridge and replies
-// with a tunnel_response.
-func (t *Tunnel) serveRequest(conn *tunnelConn, req nanoprotocol.TunnelRequest) {
-	resp := t.doLocal(req)
-	out, err := nanoprotocol.NewMessage(nanoprotocol.TypeTunnelResponse, resp)
-	if err != nil {
-		return
-	}
-	if err := conn.writeJSON(out); err != nil {
-		slog.Warn("tunnel response write failed", "request_id", req.RequestID, "error", err)
-	}
+// serveRequest proxies an inline tunnel_request to the local HTTP bridge. The
+// answer still goes through the streaming writer: a request can be small while
+// its response is a whole file.
+func (t *Tunnel) serveRequest(ctx context.Context, conn *tunnelConn, req nanoprotocol.TunnelRequest) {
+	// Register even an inline request: its answer may be a whole file, and the
+	// caller must be able to stop it.
+	reqCtx, cancel := context.WithCancel(ctx)
+	st := &tunnelStream{cancel: cancel}
+	t.track(req.RequestID, st)
+	t.serveLocal(reqCtx, conn, req, bytes.NewReader(req.Body), st)
 }
 
 // doLocal executes the request against the local hypervisor HTTP bridge.

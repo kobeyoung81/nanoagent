@@ -12,14 +12,26 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"gitee.com/kobeyoung81/nanosec/internal/gitsvc"
 	"gitee.com/kobeyoung81/nanosec/internal/workspace"
 )
 
-// maxFileUploadSize caps file uploads (10 MiB).
-const maxFileUploadSize = 10 << 20
+// maxFileUploadBytes caps one uploaded file. It is an application limit, not a
+// transport one: the tunnel streams whatever size this allows, so raising it is
+// the whole change needed for bigger files.
+var maxFileUploadBytes = loadMaxFileUploadBytes()
+
+func loadMaxFileUploadBytes() int64 {
+	if raw := strings.TrimSpace(os.Getenv("NANOSEC_HYPERVISOR_MAX_FILE_BYTES")); raw != "" {
+		if n, err := strconv.ParseInt(raw, 10, 64); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 2 << 30
+}
 
 // Server is the hypervisor external HTTP bridge (health + agent files browser).
 type Server struct {
@@ -297,7 +309,7 @@ func (s *Server) handleFileContent(w http.ResponseWriter, r *http.Request) {
 		s.deleteFileContent(w, resolved)
 		return
 	}
-	s.readFileContent(w, resolved)
+	s.readFileContent(w, r, resolved)
 }
 
 // deleteFileContent removes a file (or empty directory).
@@ -326,10 +338,16 @@ func (s *Server) deleteFileContent(w http.ResponseWriter, resolved string) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-func (s *Server) readFileContent(w http.ResponseWriter, resolved string) {
-	info, err := os.Stat(resolved)
+func (s *Server) readFileContent(w http.ResponseWriter, r *http.Request, resolved string) {
+	file, err := os.Open(resolved)
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "file not found"})
+		return
+	}
+	defer func() { _ = file.Close() }()
+	info, err := file.Stat()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 	if info.IsDir() {
@@ -337,20 +355,13 @@ func (s *Server) readFileContent(w http.ResponseWriter, resolved string) {
 		return
 	}
 
-	content, err := os.ReadFile(resolved)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
+	if contentType := mime.TypeByExtension(filepath.Ext(resolved)); contentType != "" {
+		w.Header().Set("Content-Type", contentType)
 	}
-
-	contentType := mime.TypeByExtension(filepath.Ext(resolved))
-	if contentType == "" {
-		contentType = http.DetectContentType(content)
-	}
-	w.Header().Set("Content-Type", contentType)
-	w.Header().Set("Content-Length", strconv.Itoa(len(content)))
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(content)
+	// ServeContent streams the file and honours Range, so a video can be seeked
+	// and a download resumed. Reading it whole is what made a large file a
+	// single enormous tunnel frame.
+	http.ServeContent(w, r, filepath.Base(resolved), info.ModTime(), file)
 }
 
 func (s *Server) writeFileContent(w http.ResponseWriter, r *http.Request, resolved string) {
@@ -358,22 +369,34 @@ func (s *Server) writeFileContent(w http.ResponseWriter, r *http.Request, resolv
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-
-	body, err := io.ReadAll(io.LimitReader(r.Body, maxFileUploadSize+1))
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	if len(body) > maxFileUploadSize {
+	if r.ContentLength > 0 && r.ContentLength > maxFileUploadBytes {
 		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "file exceeds max size"})
 		return
 	}
 
-	if err := os.WriteFile(resolved, body, 0o644); err != nil {
+	file, err := os.OpenFile(resolved, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-
+	written, copyErr := io.Copy(file, io.LimitReader(r.Body, maxFileUploadBytes+1))
+	closeErr := file.Close()
+	if copyErr != nil {
+		_ = os.Remove(resolved)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": copyErr.Error()})
+		return
+	}
+	if closeErr != nil {
+		_ = os.Remove(resolved)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": closeErr.Error()})
+		return
+	}
+	if written > maxFileUploadBytes {
+		// The stream was longer than the limit: do not leave half a file behind.
+		_ = os.Remove(resolved)
+		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "file exceeds max size"})
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
