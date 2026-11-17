@@ -44,6 +44,27 @@ nanosec agent --user <id> --agent <agent-id> --bus-url http://nanobus:9000
 `nanosec home reconcile` rebuilds the workspace skeleton from the template
 (`AGENT.md`, `bootstrap/`, `memory/`) without touching what the agent wrote.
 
+## Runtime base image
+
+The service image starts from `kobeyoung81/nanoagent-runtime:<n>`, a tool layer
+built once from `runtime-base/Dockerfile`: the Ubuntu packages (including the
+.NET runtime dependencies officecli needs), nvm/Node, Go, the common CLI tools
+and the pinned officecli binary. Keeping that layer separate means a service
+build is a few `COPY` instructions instead of a full toolchain install, and the
+build host no longer reaches GitHub for officecli (whose release download is slow
+and unreliable there).
+
+Build it on the same Docker daemon the CI uses:
+
+```
+docker build -t kobeyoung81/nanoagent-runtime:1 nanoagent/runtime-base
+```
+
+The image is kept locally rather than pushed. If it is pruned, rebuild it with
+the command above before building the service image. Toolchain upgrades follow
+the same rule: build `:2`, point this module's `Dockerfile` at it, and keep `:1`
+available for rollback.
+
 ## Configuration
 
 | Variable | Meaning |
