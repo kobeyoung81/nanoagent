@@ -14,7 +14,7 @@ ARG COMMIT=none
 ARG DATE=unknown
 ARG LDFLAGS="-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${DATE}"
 
-RUN CGO_ENABLED=0 go build -ldflags "${LDFLAGS}" -o /bin/nanosec ./cmd/nanosec
+RUN CGO_ENABLED=0 go build -trimpath -ldflags "${LDFLAGS}" -o /bin/nanosec ./cmd/nanosec
 
 # md2pdf is built from the maintained fork (gitee.com/kobeyoung81/md2pdf, v2
 # module). It needs go >= 1.25 (one major release ahead of nanosec's own
@@ -31,7 +31,7 @@ RUN apk add --no-cache git
 RUN git clone --depth 1 --branch "${MD2PDF_REF}" --recursive --shallow-submodules \
       https://gitee.com/kobeyoung81/md2pdf.git /src/md2pdf
 WORKDIR /src/md2pdf
-RUN CGO_ENABLED=0 go build -o /out/md2pdf ./cmd/md2pdf
+RUN CGO_ENABLED=0 go build -trimpath -o /out/md2pdf ./cmd/md2pdf
 
 # Runtime: Ubuntu LTS. The container starts as root so the entrypoint can
 # create/rename the per-user Linux user (named after the account display name
