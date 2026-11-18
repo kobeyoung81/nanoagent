@@ -744,10 +744,15 @@ func runAgent(userID string, bindingID int64, agentID, busURL string, readyFD in
 		if st, merr := json.Marshal(mcpBridge.Status()); merr == nil {
 			ag.EmitStatus("mcp_status", string(st))
 		}
+		mcpToolCount := 0
+		for _, tools := range mcpToolsByServer {
+			mcpToolCount += len(tools)
+		}
 		slog.Info("capabilities applied",
 			"agent", record.ID,
 			"builtin_tools", len(resolved.BuiltinEnabled),
 			"mcp_servers", len(union),
+			"mcp_tools", mcpToolCount,
 			"skills", len(resolved.Skills),
 			"model", merged.Provider.DefaultModel,
 		)

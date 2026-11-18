@@ -86,3 +86,63 @@ func TestMcpBridgeInjectsAgentIdentity(t *testing.T) {
 		}
 	}
 }
+
+// A tool can be added to a running server without its URL changing. The bridge
+// must ask again on every reconcile, otherwise a deployed tool never reaches a
+// connected agent until it restarts.
+func TestMcpBridgeRelistsToolsOnReconcile(t *testing.T) {
+	var (
+		mu      sync.Mutex
+		listing int
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ID     json.RawMessage `json:"id"`
+			Method string          `json:"method"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if len(req.ID) == 0 {
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
+		result := any(map[string]any{})
+		switch req.Method {
+		case "initialize":
+			result = map[string]any{
+				"protocolVersion": "2025-03-26",
+				"capabilities":    map[string]any{"tools": map[string]any{}},
+				"serverInfo":      map[string]any{"name": "fake", "version": "1"},
+			}
+		case "tools/list":
+			mu.Lock()
+			listing++
+			round := listing
+			mu.Unlock()
+			tools := []map[string]any{{"name": "artifact_publish"}}
+			if round > 1 {
+				tools = append(tools, map[string]any{"name": "folder_create"})
+			}
+			result = map[string]any{"tools": tools}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": result})
+	}))
+	defer server.Close()
+
+	defs := []nanoprotocol.McpServerDef{{
+		ID:        "artifacts",
+		Transport: "http",
+		URL:       server.URL,
+		Headers:   map[string]string{"Authorization": "Bearer shared"},
+	}}
+	bridge := NewMcpBridge("agent-42", "", "")
+	if tools := bridge.Sync(context.Background(), defs); len(tools) != 1 {
+		t.Fatalf("first sync returned %d tools, want 1", len(tools))
+	}
+	if tools := bridge.Sync(context.Background(), defs); len(tools) != 2 {
+		t.Fatalf("second sync returned %d tools, want 2 (the list was not refreshed)", len(tools))
+	}
+}

@@ -119,15 +119,20 @@ func (b *McpBridge) Sync(ctx context.Context, servers []nanoprotocol.McpServerDe
 				spec.tools[t.Name] = t
 			}
 			b.specs[id] = spec
-		} else if b.clients[id].State() != mcp.StateConnected {
-			// Known-but-degraded server: the client reconnects inside ListTools.
-			// Refresh the tool list so newly added/removed tools are picked up.
+		} else {
+			// A server can add or remove tools without changing its spec: the spec
+			// hash covers connection parameters, not the tool list. Re-list on every
+			// reconcile so a tool deployed behind an unchanged URL becomes visible
+			// without restarting the agent (a degraded client reconnects inside
+			// ListTools).
 			if tools, err := withListTimeout(listCtx, b.clients[id]); err == nil {
 				spec.tools = map[string]mcp.Tool{}
 				for _, t := range tools {
 					spec.tools[t.Name] = t
 				}
 				b.specs[id] = spec
+			} else {
+				slog.Debug("mcp: tool refresh failed, keeping the known list", "server", id, "error", err)
 			}
 		}
 		for toolName, t := range spec.tools {
