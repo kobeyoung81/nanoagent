@@ -13,6 +13,9 @@ package main
 // the registry happens to hold" on purpose: a tool added to the registry later
 // must be opted in here, so a new capability does not silently become available
 // to every agent on the next deploy.
+// goal_report is on: the goal loop may start a round in any build session, and
+// the tool refuses on its own outside one. Types that should never report (the
+// read-only roles, the judge itself) still switch it off in their own belt.
 var defaultOnBuiltinTools = map[string]bool{
 	"append_note":        true,
 	"bash":               true,
@@ -20,6 +23,7 @@ var defaultOnBuiltinTools = map[string]bool{
 	"download_media":     true,
 	"edit":               true,
 	"glob":               true,
+	"goal_report":        true,
 	"grep":               true,
 	"list":               true,
 	"load_skill":         true,
