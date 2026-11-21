@@ -44,3 +44,7 @@ cli_terminal.jsonl
 *~
 .DS_Store
 Thumbs.db
+
+# The runtime base is built separately (nanoagent/runtime-base), never from the
+# service context.
+runtime-base/

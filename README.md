@@ -46,9 +46,10 @@ nanosec agent --user <id> --agent <agent-id> --bus-url http://nanobus:9000
 
 ## Runtime base image
 
-The service image starts from `kobeyoung81/nanoagent-runtime:<n>`, a tool layer
-built once from `runtime-base/Dockerfile`: the Ubuntu packages (including the
-.NET runtime dependencies officecli needs), nvm/Node, Go, the common CLI tools
+The service image starts from
+`kobeyoung81/nanoagent-runtime:24.04-node26.13.1-go1.27.4-r1`, a tool layer built
+once from `runtime-base/Dockerfile`: the Ubuntu packages (including the .NET
+runtime dependencies officecli needs), nvm/Node, Go, md2pdf, the common CLI tools
 and the pinned officecli binary. Keeping that layer separate means a service
 build is a few `COPY` instructions instead of a full toolchain install, and the
 build host no longer reaches GitHub for officecli (whose release download is slow
@@ -57,13 +58,14 @@ and unreliable there).
 Build it on the same Docker daemon the CI uses:
 
 ```
-docker build -t kobeyoung81/nanoagent-runtime:1 nanoagent/runtime-base
+docker build -t kobeyoung81/nanoagent-runtime:24.04-node26.13.1-go1.27.4-r1 nanoagent/runtime-base
 ```
 
-The image is kept locally rather than pushed. If it is pruned, rebuild it with
-the command above before building the service image. Toolchain upgrades follow
-the same rule: build `:2`, point this module's `Dockerfile` at it, and keep `:1`
-available for rollback.
+It is published to Docker Hub (public, like the service images) and also kept
+locally, which is what the CI hits first. Toolchain upgrades follow one rule:
+change the ARGs, bump the revision suffix (`-r2`), build, point this module's
+`Dockerfile` at the new tag, and keep the previous tag for rollback. Never rebuild
+an existing tag — it names a set of contents.
 
 ## Configuration
 
