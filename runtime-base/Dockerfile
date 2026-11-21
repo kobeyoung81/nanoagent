@@ -2,7 +2,7 @@
 #
 # Build once per toolchain version, on the same Docker daemon the CI uses:
 #
-#   docker build -t kobeyoung81/nanoagent-runtime:24.04-node26.13.1-go1.27.4-r2 \
+#   docker build -t kobeyoung81/nanoagent-runtime:24.04-node26.13.1-go1.27.4-r3 \
 #     nanoagent/runtime-base
 #
 # The service image (`nanoagent/Dockerfile`) then starts from this image and only
@@ -13,14 +13,14 @@
 #
 # The tag carries the toolchain versions on purpose: it is immutable, and a
 # reader of the service Dockerfile can see what it runs on. Bump the versions,
-# bump the revision suffix (-r2), build, point nanoagent/Dockerfile at the new
+# bump the revision suffix (-r3), build, point nanoagent/Dockerfile at the new
 # tag, and keep the previous tag for rollback.
 #
 # The image is published to Docker Hub (public, like the services) so a fresh
 # machine does not have to rebuild it; it is also kept locally, which is what the
 # CI hits first.
 
-FROM kobeyoung81/base-go:1.27.4-alpine3.24-r2 AS md2pdf-builder
+FROM kobeyoung81/base-go:1.27.4-alpine3.24-r3 AS md2pdf-builder
 
 ARG MD2PDF_REF=v2.3.0
 RUN set -eux; \
@@ -59,7 +59,7 @@ ARG NODE_SHA256=5c063e46bab0fbc1c17cc445d7ff129cbdcd0471be6ed83b6ab864f8143bc864
 ARG MD2PDF_REF=v2.3.0
 
 LABEL org.opencontainers.image.title="nanoagent-runtime" \
-      org.opencontainers.image.version="24.04-node${NODE_VERSION}-go${GO_VERSION}-r2" \
+      org.opencontainers.image.version="24.04-node${NODE_VERSION}-go${GO_VERSION}-r3" \
       org.opencontainers.image.revision="${MD2PDF_REF}" \
       org.opencontainers.image.source="https://gitee.com/kobeyoung81/nanoagent" \
       org.opencontainers.image.licenses="AGPL-3.0-only"

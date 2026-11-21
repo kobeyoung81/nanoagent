@@ -63,7 +63,7 @@ docker build -t kobeyoung81/nanoagent-runtime:24.04-node26.13.1-go1.27.4-r1 nano
 
 It is published to Docker Hub (public, like the service images) and also kept
 locally, which is what the CI hits first. Toolchain upgrades follow one rule:
-change the ARGs, bump the revision suffix (`-r2`), build, point this module's
+change the ARGs, bump the revision suffix (`-r3`), build, point this module's
 `Dockerfile` at the new tag, and keep the previous tag for rollback. Never rebuild
 an existing tag — it names a set of contents.
 

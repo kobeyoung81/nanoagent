@@ -1,4 +1,4 @@
-FROM kobeyoung81/base-go:1.27.4-alpine3.24-r2 AS builder
+FROM kobeyoung81/base-go:1.27.4-alpine3.24-r3 AS builder
 
 WORKDIR /src
 COPY go.mod go.sum ./
@@ -28,7 +28,7 @@ RUN --mount=type=cache,id=nanosec-gomod,target=/root/go/pkg/mod \
 # with gosu. Terminal sessions run as that user and may sudo (NOPASSWD) to
 # install tools themselves. The data root is the user's home (/home/<username>)
 # — agents/, sharedspace/ and the profile files live there directly.
-FROM kobeyoung81/nanoagent-runtime:24.04-node26.13.1-go1.27.4-r2
+FROM kobeyoung81/nanoagent-runtime:24.04-node26.13.1-go1.27.4-r3
 
 # Build metadata. All three come from the tagged commit (the version tag, the
 # commit sha, and that commit's time), so two builds of one tag describe the same
