@@ -170,6 +170,24 @@ func (r *Registry) SetGoalContext(c GoalContext) {
 	}
 }
 
+// GoalJudgeTool is implemented by tools that judge a goal round through the
+// agent's utility path (e.g. GoalReportTool).
+type GoalJudgeTool interface {
+	SetGoalJudge(fn func(ctx context.Context, input string) (string, bool))
+}
+
+// SetGoalJudge forwards the utility runner to every registered tool that judges
+// a goal round.
+func (r *Registry) SetGoalJudge(fn func(ctx context.Context, input string) (string, bool)) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, t := range r.tools {
+		if gt, ok := t.(GoalJudgeTool); ok {
+			gt.SetGoalJudge(fn)
+		}
+	}
+}
+
 // PolicyContextTool is implemented by tools whose behaviour depends on what the
 // calling agent may use (e.g. TaskTool, whose delegation is attenuated by the
 // caller's own policy).

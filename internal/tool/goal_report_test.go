@@ -91,6 +91,11 @@ func TestGoalReport_L1Checks(t *testing.T) {
 func TestGoalReport_NormalisesTheReport(t *testing.T) {
 	tl := NewGoalReportTool()
 	tl.SetGoalContext(goalRound())
+	var judged string
+	tl.SetGoalJudge(func(_ context.Context, input string) (string, bool) {
+		judged = input
+		return `{"verdict":"not_yet","reason":"four call sites left","missing":["middleware.go"]}`, true
+	})
 	out, err := tl.Execute(context.Background(), map[string]any{
 		"summary": "  auth token migrated  ",
 		"evidence": []any{
@@ -105,14 +110,18 @@ func TestGoalReport_NormalisesTheReport(t *testing.T) {
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
-	for _, want := range []string{
-		`"goal_id": "g_1"`, `"round": 3`, `"summary": "auth token migrated"`,
-		`"cmd": "go build ./..."`, `"exit": 0`,
-		`"internal/auth/token.go"`, "update call sites",
-		"four call sites left",
-	} {
+	for _, want := range []string{"第 4 轮", "not_yet", "four call sites left"} {
 		if !strings.Contains(out, want) {
-			t.Errorf("report is missing %q:\n%s", want, out)
+			t.Errorf("answer is missing %q:\n%s", want, out)
+		}
+	}
+	// The judge sees the round's evidence, not the model's summary alone.
+	for _, want := range []string{
+		"go build ./...", "exit 0", "internal/auth/token.go",
+		"update call sites", "auth token migrated",
+	} {
+		if !strings.Contains(judged, want) {
+			t.Errorf("judge input is missing %q:\n%s", want, judged)
 		}
 	}
 }

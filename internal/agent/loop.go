@@ -184,6 +184,10 @@ func (a *Agent) processMessage(ctx context.Context, msg *nanoprotocol.InboundMes
 	// A scheduled task's turn has nobody to answer a question; tools that would
 	// block on a user must refuse instead (see tool.HeadlessTool).
 	a.tools.SetHeadless(isScheduledTurn(msg))
+	// A goal round's binding: which goal, which round, and whether this is the
+	// verification round. Outside a goal round this is the zero value, so the
+	// report tool refuses instead of writing into a stale goal.
+	a.tools.SetGoalContext(goalContextOf(msg))
 
 	// A task names its conversation on its first run: the task name is a better
 	// entry in the conversation list than the truncated instruction, and a

@@ -1,26 +1,44 @@
 package tool
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"strings"
 	"sync"
+	"time"
 
 	"gitee.com/kobeyoung81/nanosec/internal/provider"
 )
 
 // GoalReportTool is how a round of a long-running goal ends.
 //
-// The tool is the only path from the agent's own account of its work to the
-// host: the model says what it believes it achieved, and every claim has to
-// carry evidence the host can check. In this batch the tool validates the report
-// and echoes the normalised form back to the model; the judge call and the POST
-// to the workspace arrive with the scheduler, and the tool's contract does not
-// change when they do.
+// It is the only path from the agent's own account of its work to the host: the
+// model says what it believes it achieved, every claim has to carry evidence the
+// host can check, and a separate judge — a one-shot utility with no tools —
+// turns the evidence into one of three verdicts. The report then goes back to
+// the workspace, which owns the goal state.
 type GoalReportTool struct {
 	mu  sync.Mutex
 	ctx GoalContext
+
+	// judge runs the goal_judge utility. nil means the utility is not
+	// registered, and the tool refuses rather than self-certifying.
+	judge func(ctx context.Context, input string) (string, bool)
+
+	workspaceURL string
+	token        string
+	http         *http.Client
+}
+
+// GoalReportOptions is where a report is posted.
+type GoalReportOptions struct {
+	WorkspaceURL string
+	Token        string
 }
 
 // GoalContext is the turn's goal binding, injected by the loop.
@@ -32,14 +50,28 @@ type GoalContext struct {
 	GoalID string
 	Round  int
 	Verify bool
-	// WorkspaceURL is where the report is posted.
-	WorkspaceURL string
-	// Token authenticates that POST.
-	Token string
+	// Instruction is the text this round was started with: the condition, the
+	// constraints and the context the scheduler injected. The judge reads it as
+	// the definition of "done".
+	Instruction string
 }
 
 // NewGoalReportTool creates the tool.
-func NewGoalReportTool() *GoalReportTool { return &GoalReportTool{} }
+func NewGoalReportTool(opts ...GoalReportOptions) *GoalReportTool {
+	t := &GoalReportTool{http: &http.Client{Timeout: 15 * time.Second}}
+	if len(opts) > 0 {
+		t.workspaceURL = strings.TrimRight(opts[0].WorkspaceURL, "/")
+		t.token = opts[0].Token
+	}
+	return t
+}
+
+// SetGoalJudge installs the utility runner used to judge a round.
+func (t *GoalReportTool) SetGoalJudge(fn func(ctx context.Context, input string) (string, bool)) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.judge = fn
+}
 
 // SetGoalContext implements GoalContextTool.
 func (t *GoalReportTool) SetGoalContext(c GoalContext) {
@@ -53,6 +85,12 @@ func (t *GoalReportTool) context() GoalContext {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.ctx
+}
+
+func (t *GoalReportTool) judgeFunc() func(context.Context, string) (string, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.judge
 }
 
 func (t *GoalReportTool) Name() string { return "goal_report" }
@@ -143,14 +181,18 @@ type ListItem struct {
 	Done bool   `json:"done"`
 }
 
-// Report is the normalised round report.
+// Report is the normalised round report, and the body posted to the workspace.
 type Report struct {
-	GoalID    string     `json:"goal_id"`
+	GoalID    string     `json:"goal_id,omitempty"`
 	Round     int        `json:"round"`
 	Verify    bool       `json:"verify,omitempty"`
 	Summary   string     `json:"summary"`
 	Evidence  []Evidence `json:"evidence"`
 	Remaining []string   `json:"remaining,omitempty"`
+	// Verdict, Reason and Missing come from the judge.
+	Verdict string   `json:"verdict"`
+	Reason  string   `json:"reason,omitempty"`
+	Missing []string `json:"missing,omitempty"`
 }
 
 // evidenceKinds is the closed set of things a round may point at. "interrupted"
@@ -163,7 +205,7 @@ var evidenceKinds = map[string]bool{
 	"list":    true,
 }
 
-func (t *GoalReportTool) Execute(_ context.Context, params map[string]any) (string, error) {
+func (t *GoalReportTool) Execute(ctx context.Context, params map[string]any) (string, error) {
 	gc := t.context()
 	if gc.GoalID == "" {
 		return "", fmt.Errorf("goal_report is only available inside a long-running goal round")
@@ -176,11 +218,171 @@ func (t *GoalReportTool) Execute(_ context.Context, params map[string]any) (stri
 	report.Round = gc.Round
 	report.Verify = gc.Verify
 
-	out, err := json.MarshalIndent(report, "", "  ")
-	if err != nil {
-		return "", err
+	judge := t.judgeFunc()
+	if judge == nil {
+		return "", fmt.Errorf("goal_report is unavailable: the goal judge is not configured")
 	}
-	return string(out), nil
+	raw, ok := judge(ctx, judgeInput(gc, report))
+	if !ok {
+		return "", fmt.Errorf("goal_report is unavailable: the goal judge could not be run")
+	}
+	verdict, reason, missing := parseVerdict(raw)
+	report.Verdict, report.Reason, report.Missing = verdict, reason, missing
+
+	// Without a configured workspace the report cannot be delivered; that only
+	// happens in tests, and the caller still gets the verdict so the tool stays
+	// exercisable without an HTTP server.
+	if t.workspaceURL != "" {
+		if err := t.post(ctx, report); err != nil {
+			return "", fmt.Errorf("the report was judged but not delivered: %w", err)
+		}
+	}
+	return fmt.Sprintf("第 %d 轮报告已提交，判定：%s。%s", gc.Round+1, verdict, reason), nil
+}
+
+// judgeInput renders the four sections the judge prompt expects.
+func judgeInput(gc GoalContext, r Report) string {
+	condition, constraints := splitInstruction(gc.Instruction)
+	var b strings.Builder
+	b.WriteString("CONDITION\n")
+	b.WriteString(condition)
+	b.WriteString("\n\nCONSTRAINTS\n")
+	b.WriteString(constraints)
+	b.WriteString("\n\nTHIS ROUND\n")
+	fmt.Fprintf(&b, "round: %d\n", gc.Round+1)
+	if gc.Verify {
+		b.WriteString("kind: verification — the condition was reported met; this round re-proves it\n")
+	} else {
+		b.WriteString("kind: work\n")
+	}
+	fmt.Fprintf(&b, "summary: %s\n", r.Summary)
+	b.WriteString("evidence:\n")
+	for _, e := range r.Evidence {
+		switch e.Kind {
+		case "command":
+			exit := "?"
+			if e.Exit != nil {
+				exit = fmt.Sprintf("%d", *e.Exit)
+			}
+			fmt.Fprintf(&b, "  - command `%s` exit %s\n", e.Cmd, exit)
+		case "file":
+			fmt.Fprintf(&b, "  - file %s", e.Path)
+			if e.Note != "" {
+				fmt.Fprintf(&b, " (%s)", e.Note)
+			}
+			b.WriteString("\n")
+		case "list":
+			for _, it := range e.Items {
+				state := "todo"
+				if it.Done {
+					state = "done"
+				}
+				fmt.Fprintf(&b, "  - list [%s] %s\n", state, it.Text)
+			}
+		}
+	}
+	if len(r.Remaining) > 0 {
+		fmt.Fprintf(&b, "remaining: %s\n", strings.Join(r.Remaining, "; "))
+	}
+	b.WriteString("\nRECENT\n(no earlier rounds are included)\n")
+	return b.String()
+}
+
+// splitInstruction pulls the condition and the constraint list out of the text
+// the scheduler injected. The wording is this platform's own, so the headings
+// are stable; an unrecognised shape keeps the whole text as the condition rather
+// than losing it.
+func splitInstruction(instruction string) (condition, constraints string) {
+	text := strings.TrimSpace(instruction)
+	if text == "" {
+		return "(the round carried no instructions)", "(none)"
+	}
+	condition = text
+	constraints = "(see CONDITION)"
+
+	if i := strings.Index(text, "判据（全部满足才算完成）："); i >= 0 {
+		rest := text[i+len("判据（全部满足才算完成）："):]
+		if j := strings.Index(rest, "\n约束："); j >= 0 {
+			condition = strings.TrimSpace(rest[:j])
+			tail := rest[j+len("\n约束："):]
+			if k := strings.Index(tail, "\n\n"); k >= 0 {
+				tail = tail[:k]
+			}
+			if c := strings.TrimSpace(tail); c != "" {
+				constraints = c
+			}
+		} else if k := strings.Index(rest, "\n\n"); k >= 0 {
+			condition = strings.TrimSpace(rest[:k])
+		} else {
+			condition = strings.TrimSpace(rest)
+		}
+	}
+	return condition, constraints
+}
+
+// parseVerdict reads the judge's JSON answer. A malformed answer is a "not_yet"
+// — the goal keeps moving, and the host never mistakes an unreadable reply for
+// success.
+func parseVerdict(raw string) (verdict, reason string, missing []string) {
+	text := strings.TrimSpace(raw)
+	if i := strings.Index(text, "{"); i >= 0 {
+		text = text[i:]
+	}
+	if j := strings.LastIndex(text, "}"); j >= 0 {
+		text = text[:j+1]
+	}
+	var payload struct {
+		Verdict string   `json:"verdict"`
+		Reason  string   `json:"reason"`
+		Missing []string `json:"missing"`
+	}
+	if err := json.Unmarshal([]byte(text), &payload); err != nil {
+		return "not_yet", "judge answer unreadable: " + truncate(raw, 80), nil
+	}
+	switch payload.Verdict {
+	case "met", "not_yet", "impossible":
+		return payload.Verdict, truncate(payload.Reason, 200), payload.Missing
+	default:
+		return "not_yet", "judge answered an unknown verdict: " + truncate(raw, 80), payload.Missing
+	}
+}
+
+func truncate(s string, n int) string {
+	r := []rune(strings.TrimSpace(s))
+	if len(r) <= n {
+		return string(r)
+	}
+	return string(r[:n]) + "…"
+}
+
+// post sends the report to the workspace, which owns the goal.
+func (t *GoalReportTool) post(ctx context.Context, r Report) error {
+	if t.workspaceURL == "" {
+		return fmt.Errorf("the workspace url is not configured")
+	}
+	body, err := json.Marshal(r)
+	if err != nil {
+		return err
+	}
+	endpoint := t.workspaceURL + "/api/v1/workspace/goals/" + url.PathEscape(r.GoalID) + "/report"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if t.token != "" {
+		req.Header.Set("Authorization", "Bearer "+t.token)
+	}
+	resp, err := t.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return fmt.Errorf("workspace answered %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+	}
+	return nil
 }
 
 // parseReport applies the L1 checks: the shape the judge is promised.

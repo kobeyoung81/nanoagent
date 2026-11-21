@@ -80,6 +80,9 @@ type Config struct {
 	// resolve within (uploaded via the file API → hypervisor workspace).
 	WorkspaceDir       string
 	SharedWorkspaceDir string
+	// WorkspaceURL is the workspace module's base URL. The goal command creates
+	// a goal there and goal_report posts each round's result back.
+	WorkspaceURL string
 	// VisionMaxImageBytes caps a single image inlined for the model (0 = the
 	// package default). VisionMaxImagesPerMessage caps attachments per turn.
 	VisionMaxImageBytes       int
@@ -242,13 +245,32 @@ func New(cfg Config, client BusClient, p provider.Provider, t *tool.Registry, op
 	}
 	ag.summarizer.SetSystemPrompt(cfg.RolePrompts["summarize"])
 	ag.summarizer.agent = ag
+	ag.wireGoalJudge()
 	return ag, nil
+}
+
+// wireGoalJudge gives the goal report tool the utility runner that judges a
+// round. It is called again after every capability rebuild, because a rebuild
+// replaces the tool instances.
+func (a *Agent) wireGoalJudge() {
+	if a.tools == nil {
+		return
+	}
+	a.tools.SetGoalJudge(func(ctx context.Context, input string) (string, bool) {
+		out, used, err := a.runUtility(ctx, "role_goal_judge", input, "goal-judge", nil)
+		if err != nil {
+			slog.Warn("goal judge failed", "error", err)
+			return "", false
+		}
+		return out, used
+	})
 }
 
 // ApplyTools atomically replaces the agent's tool set (capability reloads only
 // run between turns, so no in-flight definition snapshot is torn).
 func (a *Agent) ApplyTools(tools map[string]tool.Tool) {
 	a.tools.ReplaceAll(tools)
+	a.wireGoalJudge()
 }
 
 // SetToolProvenance records which registered tool names are builtins and which
@@ -359,6 +381,31 @@ func isScheduledTurn(msg *nanoprotocol.InboundMessage) bool {
 	}
 	src, _ := msg.Metadata[metadataSourceKey].(string)
 	return unattendedSources[src]
+}
+
+// goalContextOf reads the goal binding a round carries. A message that is not a
+// goal round gets the zero value, which is what makes goal_report refuse outside
+// the loop.
+func goalContextOf(msg *nanoprotocol.InboundMessage) tool.GoalContext {
+	if msg == nil || msg.Metadata == nil {
+		return tool.GoalContext{}
+	}
+	src, _ := msg.Metadata[metadataSourceKey].(string)
+	if src != "goal" {
+		return tool.GoalContext{}
+	}
+	id, _ := msg.Metadata["goal_id"].(string)
+	round := 0
+	switch v := msg.Metadata["round"].(type) {
+	case float64:
+		round = int(v)
+	case int:
+		round = v
+	case int64:
+		round = int(v)
+	}
+	verify, _ := msg.Metadata["verify"].(bool)
+	return tool.GoalContext{GoalID: id, Round: round, Verify: verify, Instruction: msg.Content}
 }
 
 // scheduledTaskName returns the task name a scheduled run carries ("" for
@@ -982,6 +1029,14 @@ func (a *Agent) Run(ctx context.Context) error {
 				if a.cancelTurn(msg.SessionID) {
 					slog.Info("turn stopped by user", "session", msg.SessionID)
 				}
+				continue
+			}
+
+			// /goal starts a long-running goal from one line; it is a command,
+			// not a turn, so the transcript does not grow a user message the
+			// model would then have to answer.
+			if desc, ok := parseGoalCommand(msg.Content); ok {
+				go a.handleGoalCommand(ctx, msg, desc)
 				continue
 			}
 

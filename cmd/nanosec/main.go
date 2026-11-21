@@ -614,6 +614,7 @@ func runAgent(userID string, bindingID int64, agentID, busURL string, readyFD in
 		SessionDir:                  paths.SessionDir,
 		WorkspaceDir:                agentHome,
 		SharedWorkspaceDir:          sharedWS,
+		WorkspaceURL:                config.WorkspaceURL(),
 		ContextWindow:               merged.Agent.ContextWindow,
 		MaxOutputTokens:             merged.Agent.MaxOutputTokens,
 		ThinkingEffort:              merged.Agent.ThinkingEffort,
