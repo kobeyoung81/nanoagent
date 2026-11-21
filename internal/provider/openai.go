@@ -74,6 +74,29 @@ func withSessionID(ctx context.Context, id string) context.Context {
 	return context.WithValue(ctx, sessionIDKey{}, id)
 }
 
+// explicitTemperatureKey carries a temperature the request asked for.
+//
+// go-openai serialises ChatCompletionRequest.Temperature with omitempty, so a
+// temperature of 0 is dropped from the body and the provider applies its own
+// default (usually 1.0). "Decode deterministically" is exactly 0, so the
+// transport patches the field back into the JSON before the request leaves.
+type explicitTemperatureKey struct{}
+
+// withExplicitTemperature records the requested temperature on the context. A
+// nil request leaves it unset: "no preference" and "exactly 0" are different
+// requests and must stay different.
+func withExplicitTemperature(ctx context.Context, t *float32) context.Context {
+	if t == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, explicitTemperatureKey{}, *t)
+}
+
+func explicitTemperatureFromContext(ctx context.Context) (float32, bool) {
+	v, ok := ctx.Value(explicitTemperatureKey{}).(float32)
+	return v, ok
+}
+
 // sessionIDFromContext returns the session ID attached by withSessionID, or "".
 func sessionIDFromContext(ctx context.Context) string {
 	id, _ := ctx.Value(sessionIDKey{}).(string)
@@ -104,6 +127,19 @@ func (t *loggingTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 		if err == nil {
 			req.Body = io.NopCloser(bytes.NewReader(b))
 			reqBody = string(b)
+		}
+	}
+
+	// A requested temperature of 0 is dropped by the SDK's omitempty, so it is
+	// written back here. Only the zero case needs the patch: every other value
+	// is already in the body.
+	if want, ok := explicitTemperatureFromContext(req.Context()); ok && want == 0 {
+		if patched, err := setRequestTemperature(reqBody, want); err == nil && patched != reqBody {
+			reqBody = patched
+			body := []byte(patched)
+			req.Body = io.NopCloser(bytes.NewReader(body))
+			req.ContentLength = int64(len(body))
+			req.GetBody = nil
 		}
 	}
 
@@ -148,6 +184,7 @@ func (t *loggingTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 
 func (p *OpenAIProvider) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
 	ctx = withSessionID(ctx, req.SessionID)
+	ctx = withExplicitTemperature(ctx, req.Temperature)
 	if p.requestTimeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, p.requestTimeout)
@@ -205,6 +242,7 @@ func (p *OpenAIProvider) Chat(ctx context.Context, req ChatRequest) (*ChatRespon
 // the full content, any accumulated tool calls, and usage.
 func (p *OpenAIProvider) ChatStream(ctx context.Context, req ChatRequest) (<-chan ChatStreamEvent, error) {
 	ctx = withSessionID(ctx, req.SessionID)
+	ctx = withExplicitTemperature(ctx, req.Temperature)
 	openaiReq, err := buildChatRequest(req, p.defaultModel, true)
 	if err != nil {
 		return nil, err
@@ -449,13 +487,17 @@ func buildChatRequest(req ChatRequest, defaultModel string, streaming bool) (ope
 		Messages:        msgs,
 		Tools:           tools,
 		ReasoningEffort: req.ReasoningEffort,
-		Temperature:     req.Temperature,
 		TopP:            req.TopP,
 	}
 	// stream_options is only valid alongside stream=true. Streaming requests
 	// need include_usage to receive the final usage chunk; non-streaming
 	// responses report usage directly, and sending stream_options without
 	// stream is rejected by some OpenAI-compatible gateways.
+	if req.Temperature != nil {
+		// A non-zero value survives omitempty; zero is patched onto the wire by
+		// the transport (see explicitTemperatureKey).
+		result.Temperature = *req.Temperature
+	}
 	if streaming {
 		result.StreamOptions = &openai.StreamOptions{IncludeUsage: true}
 	}
@@ -540,4 +582,23 @@ func rawSchema(t ToolDef) json.RawMessage {
 		return params
 	}
 	return json.RawMessage(`{"type":"object","properties":{}}`)
+}
+
+// setRequestTemperature writes an explicit temperature into a chat-completion
+// body the SDK produced. It is a no-op when the body already carries the field,
+// and refuses to touch a body that is not a JSON object.
+func setRequestTemperature(body string, value float32) (string, error) {
+	if strings.Contains(body, `"temperature"`) {
+		return body, nil
+	}
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(body), &payload); err != nil {
+		return body, err
+	}
+	payload["temperature"] = json.RawMessage(strconv.FormatFloat(float64(value), 'f', -1, 32))
+	out, err := json.Marshal(payload)
+	if err != nil {
+		return body, err
+	}
+	return string(out), nil
 }

@@ -441,7 +441,8 @@ func applyModelParams(cfg *config.AgentCoreConfig, md *nanoprotocol.ModelDef) {
 	}
 	if json.Unmarshal([]byte(md.Params), &p) == nil {
 		if p.Temperature != nil {
-			cfg.Temperature = float32(*p.Temperature)
+			v := float32(*p.Temperature)
+			cfg.Temperature = &v
 		}
 		if p.TopP != nil {
 			cfg.TopP = float32(*p.TopP)

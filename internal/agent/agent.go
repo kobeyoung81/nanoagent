@@ -90,8 +90,9 @@ type Config struct {
 	// resolves none of its own (see cmd/nanosec/models.go's
 	// resolveThinkingEffort); "" sends no level at all.
 	ThinkingEffort string
-	// Temperature/TopP are optional per-model sampling params (0 = unset).
-	Temperature               float32
+	// Temperature/TopP are optional per-model sampling params. Temperature is
+	// nil when unset: a pointer to 0 asks for deterministic decoding.
+	Temperature               *float32
 	TopP                      float32
 	MaxToolResultChars        int
 	SummarizeTokenPercent     int
@@ -340,14 +341,24 @@ func (a *Agent) InjectSystemMessage(sessionID, channel, chatID, content string) 
 // LLM context should start (everything before it is covered by the summary).
 const compactFromMetaKey = "compact_from"
 
-// isScheduledTurn reports whether a message was started by the scheduler rather
-// than by a person, so the turn runs unattended.
+// unattendedSources are the metadata source values that mean "no human is
+// watching this turn": the scheduler ("cron") and the long-running goal loop
+// ("goal"). A whitelist rather than a comparison, because the next unattended
+// producer has to be named here on purpose — a default of "unattended" would
+// silently give an ordinary user turn the scheduler's behaviour.
+var unattendedSources = map[string]bool{
+	"cron": true,
+	"goal": true,
+}
+
+// isScheduledTurn reports whether a message was started by the scheduler or the
+// goal loop rather than by a person, so the turn runs unattended.
 func isScheduledTurn(msg *nanoprotocol.InboundMessage) bool {
 	if msg == nil || msg.Metadata == nil {
 		return false
 	}
 	src, _ := msg.Metadata[metadataSourceKey].(string)
-	return src == "cron"
+	return unattendedSources[src]
 }
 
 // scheduledTaskName returns the task name a scheduled run carries ("" for

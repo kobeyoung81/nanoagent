@@ -150,6 +150,26 @@ func (r *Registry) SetPlanPath(path string) {
 	}
 }
 
+// GoalContextTool is implemented by tools that act on one round of a
+// long-running goal (e.g. GoalReportTool). The binding is per turn — the agent
+// runs several messages concurrently, so it cannot live on the agent.
+type GoalContextTool interface {
+	SetGoalContext(c GoalContext)
+}
+
+// SetGoalContext forwards the turn's goal binding to every registered tool that
+// implements GoalContextTool. Outside a goal round the zero value is forwarded:
+// a tool that needs a binding refuses, rather than acting on a stale one.
+func (r *Registry) SetGoalContext(c GoalContext) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, t := range r.tools {
+		if gt, ok := t.(GoalContextTool); ok {
+			gt.SetGoalContext(c)
+		}
+	}
+}
+
 // PolicyContextTool is implemented by tools whose behaviour depends on what the
 // calling agent may use (e.g. TaskTool, whose delegation is attenuated by the
 // caller's own policy).

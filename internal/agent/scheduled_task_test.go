@@ -204,6 +204,20 @@ func TestIsScheduledTurn_OnlySchedulerMessages(t *testing.T) {
 	if !isScheduledTurn(scheduledMessage("web:task-1", "go")) {
 		t.Error("a scheduler message must be treated as unattended")
 	}
+	// The goal loop is the second unattended producer: it runs a round with no
+	// user present, so a blocking tool must refuse there too.
+	goalMsg := scheduledMessage("web:task-1", "round 3")
+	goalMsg.Metadata["source"] = "goal"
+	if !isScheduledTurn(goalMsg) {
+		t.Error("a goal round must be treated as unattended")
+	}
+	// An unknown source keeps its block-on-the-user behaviour; the whitelist is
+	// what makes that the safe default.
+	other := scheduledMessage("web:task-1", "hello")
+	other.Metadata["source"] = "subagent"
+	if isScheduledTurn(other) {
+		t.Error("an unknown source must not be treated as unattended")
+	}
 	if got := scheduledTaskName(scheduledMessage("web:task-1", "go")); got != "server patrol" {
 		t.Errorf("task name = %q", got)
 	}

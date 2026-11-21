@@ -55,12 +55,15 @@ type AgentCoreConfig struct {
 	// entry. Passed through as reasoning_effort; empty sends no level at all.
 	// See cmd/nanosec/models.go (resolveThinkingEffort).
 	ThinkingEffort string `json:"thinkingEffort" mapstructure:"thinkingEffort"`
-	// Temperature/TopP are optional per-model sampling parameters (0 = unset).
-	Temperature               float32 `json:"temperature" mapstructure:"temperature"`
-	TopP                      float32 `json:"topP" mapstructure:"topP"`
-	MaxToolResultChars        int     `json:"maxToolResultChars"        mapstructure:"maxToolResultChars"`
-	SummarizeTokenPercent     int     `json:"summarizeTokenPercent"     mapstructure:"summarizeTokenPercent"`
-	SummarizeMessageThreshold int     `json:"summarizeMessageThreshold" mapstructure:"summarizeMessageThreshold"`
+	// Temperature/TopP are optional per-model sampling parameters. nil means
+	// "not set" (the provider's own default is used); a pointer to 0 is an
+	// explicit request for deterministic decoding and is sent as
+	// "temperature":0. The distinction matters: the goal judge pins 0.
+	Temperature               *float32 `json:"temperature" mapstructure:"temperature"`
+	TopP                      float32  `json:"topP" mapstructure:"topP"`
+	MaxToolResultChars        int      `json:"maxToolResultChars"        mapstructure:"maxToolResultChars"`
+	SummarizeTokenPercent     int      `json:"summarizeTokenPercent"     mapstructure:"summarizeTokenPercent"`
+	SummarizeMessageThreshold int      `json:"summarizeMessageThreshold" mapstructure:"summarizeMessageThreshold"`
 	// TitleRefreshMessages is the minimum number of new messages before an
 	// existing conversation title is regenerated (0 disables refresh).
 	TitleRefreshMessages int `json:"titleRefreshMessages" mapstructure:"titleRefreshMessages"`

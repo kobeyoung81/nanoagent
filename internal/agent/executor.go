@@ -62,7 +62,7 @@ type reactHooks struct {
 type reactRequest struct {
 	model       string
 	reasoning   string
-	temperature float32
+	temperature *float32
 	topP        float32
 	sessionID   string
 	tools       []provider.ToolDef

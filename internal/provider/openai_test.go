@@ -421,3 +421,55 @@ func TestChatStream_IdlessContinuationsFollowTheReusedIndex(t *testing.T) {
 		t.Errorf("second call = %+v", calls[1])
 	}
 }
+
+// TestChatStream_ExplicitTemperatureReachesTheWire is the goal judge's
+// guarantee: a request that asks for 0 must carry "temperature":0, because 0 is
+// how the judge is pinned and the SDK's omitempty would otherwise drop it (the
+// provider would then use its default, usually 1.0).
+//
+// The same request without a temperature must NOT carry the key at all: "no
+// preference" keeps the provider default and must not be turned into 0.
+func TestChatStream_ExplicitTemperatureReachesTheWire(t *testing.T) {
+	var bodies []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		bodies = append(bodies, string(raw))
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}`+"\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+	}))
+	defer srv.Close()
+
+	p := NewOpenAI("test-key", srv.URL, "test-model", 5*time.Second)
+	drain := func(req ChatRequest) {
+		stream, err := p.ChatStream(context.Background(), req)
+		if err != nil {
+			t.Fatalf("ChatStream: %v", err)
+		}
+		for range stream {
+		}
+	}
+
+	zero := float32(0)
+	drain(ChatRequest{Messages: []Message{{Role: "user", Content: "judge this"}}, Temperature: &zero})
+	drain(ChatRequest{Messages: []Message{{Role: "user", Content: "answer this"}}})
+	third := float32(0.7)
+	drain(ChatRequest{Messages: []Message{{Role: "user", Content: "answer this"}}, Temperature: &third})
+
+	if len(bodies) != 3 {
+		t.Fatalf("captured %d bodies, want 3", len(bodies))
+	}
+	if !strings.Contains(bodies[0], `"temperature":0`) {
+		t.Errorf("explicit zero did not reach the wire: %s", bodies[0])
+	}
+	if strings.Contains(bodies[1], `"temperature"`) {
+		t.Errorf("an unset temperature must not be sent: %s", bodies[1])
+	}
+	if !strings.Contains(bodies[2], `"temperature":0.7`) {
+		t.Errorf("a non-zero temperature was lost: %s", bodies[2])
+	}
+}

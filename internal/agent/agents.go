@@ -22,7 +22,7 @@ type ResolvedAgent struct {
 	Prompt          string
 	Model           string
 	ReasoningEffort string
-	Temperature     float32
+	Temperature     *float32
 	TopP            float32
 	// EnabledTools is the builtin-tool allowlist derived from the definition's
 	// capability baseline. nil means "no baseline" (all tools). It gates
@@ -313,11 +313,31 @@ func effectiveReasoning(spec ResolvedAgent, fallback string) string {
 	return fallback
 }
 
-func effectiveTemp(spec ResolvedAgent, fallback float32) float32 {
-	if spec.Temperature != 0 {
+// effectiveTemp resolves the sampling temperature: the definition's own value
+// when it set one, else the agent-wide fallback. Both are optional, and both use
+// nil for "not set" so an explicit 0 (deterministic decoding) survives.
+func effectiveTemp(spec ResolvedAgent, fallback *float32) *float32 {
+	if spec.Temperature != nil {
 		return spec.Temperature
 	}
 	return fallback
+}
+
+// utilityTemperature is the temperature a one-shot utility call uses. A
+// definition may pin one in its settings ("judge_temperature"), which is how the
+// goal judge locks itself to deterministic output; otherwise the model entry's
+// own params apply.
+func utilityTemperature(spec ResolvedAgent) *float32 {
+	raw := spec.setting("judge_temperature", "")
+	if raw == "" {
+		return spec.Temperature
+	}
+	v, err := strconv.ParseFloat(raw, 32)
+	if err != nil {
+		return spec.Temperature
+	}
+	t := float32(v)
+	return &t
 }
 
 func effectiveTopP(spec ResolvedAgent, fallback float32) float32 {
@@ -347,7 +367,7 @@ func (a *Agent) runUtility(ctx context.Context, id, userContent, sessionID strin
 	resp, err := chatStreamCollectWith(ctx, prov, provider.ChatRequest{
 		Model:           model,
 		ReasoningEffort: spec.ReasoningEffort,
-		Temperature:     spec.Temperature,
+		Temperature:     utilityTemperature(spec),
 		TopP:            spec.TopP,
 		SessionID:       sessionID + ":" + id,
 		Messages: []provider.Message{

@@ -484,6 +484,12 @@ func runAgent(userID string, bindingID int64, agentID, busURL string, readyFD in
 		if keep("question") {
 			registry.Register(tool.NewQuestionTool(qBroker))
 		}
+		// The report that ends a long-running goal's round. Registered like any
+		// other tool so the model sees one surface; it refuses outside a goal
+		// round, which is every turn until the scheduler ships.
+		if keep("goal_report") {
+			registry.Register(tool.NewGoalReportTool())
+		}
 		if keep("download_media") && cfg.Media.CorpID != "" && cfg.Media.CorpSecret != "" {
 			registry.Register(tool.NewMediaDownloadTool(
 				paths.MediaBaseDir,

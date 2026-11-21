@@ -54,10 +54,12 @@ type ChatRequest struct {
 	// reasoning_effort parameter; empty means the parameter is never sent
 	// (safe for providers and models that do not support it).
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
-	// Temperature / TopP are optional per-model sampling parameters. Zero
-	// means the parameter is omitted (provider default).
-	Temperature float32 `json:"temperature,omitempty"`
-	TopP        float32 `json:"top_p,omitempty"`
+	// Temperature / TopP are optional per-model sampling parameters. A nil
+	// temperature means the parameter is omitted (provider default); a pointer
+	// to zero is an explicit "decode deterministically" and must reach the wire
+	// as 0, which is why this one is a pointer and TopP is not.
+	Temperature *float32 `json:"temperature,omitempty"`
+	TopP        float32  `json:"top_p,omitempty"`
 }
 
 // Message represents a chat message.
