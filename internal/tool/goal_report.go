@@ -33,6 +33,11 @@ type GoalReportTool struct {
 	workspaceURL string
 	token        string
 	http         *http.Client
+
+	// reported marks the current round as delivered. A model that calls the
+	// tool twice in one round would otherwise send a report for a round the host
+	// has already advanced, and get a 409 that looks like a failure.
+	reported bool
 }
 
 // GoalReportOptions is where a report is posted.
@@ -77,7 +82,23 @@ func (t *GoalReportTool) SetGoalJudge(fn func(ctx context.Context, input string)
 func (t *GoalReportTool) SetGoalContext(c GoalContext) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if c.GoalID != t.ctx.GoalID || c.Round != t.ctx.Round {
+		t.reported = false
+	}
 	t.ctx = c
+}
+
+// alreadyReported reports whether this round's report has been delivered.
+func (t *GoalReportTool) alreadyReported() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.reported
+}
+
+func (t *GoalReportTool) markReported() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.reported = true
 }
 
 // context returns the current binding, or the zero value outside a goal round.
@@ -210,6 +231,9 @@ func (t *GoalReportTool) Execute(ctx context.Context, params map[string]any) (st
 	if gc.GoalID == "" {
 		return "", fmt.Errorf("goal_report is only available inside a long-running goal round")
 	}
+	if t.alreadyReported() {
+		return fmt.Sprintf("第 %d 轮的报告已经提交过了，无需重复。", gc.Round+1), nil
+	}
 	report, err := parseReport(params)
 	if err != nil {
 		return "", err
@@ -238,6 +262,7 @@ func (t *GoalReportTool) Execute(ctx context.Context, params map[string]any) (st
 	if err := t.post(ctx, report); err != nil {
 		return "", fmt.Errorf("the report was judged but not delivered: %w", err)
 	}
+	t.markReported()
 	return fmt.Sprintf("第 %d 轮报告已提交，判定：%s。%s", gc.Round+1, verdict, reason), nil
 }
 

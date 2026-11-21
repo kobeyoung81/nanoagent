@@ -141,3 +141,51 @@ func TestGoalReport_DeliveryFailureIsReported(t *testing.T) {
 		t.Fatalf("err = %v, want a delivery error", err)
 	}
 }
+
+// TestGoalReport_SecondCallIsHarmless pins the guard against a model that
+// reports twice: the second call answers without judging or posting, instead of
+// sending a report for a round the host has already advanced.
+func TestGoalReport_SecondCallIsHarmless(t *testing.T) {
+	var posts int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		posts++
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	var judgements int
+	tl := NewGoalReportTool(GoalReportOptions{WorkspaceURL: srv.URL, Token: "t"})
+	tl.SetGoalContext(judgeGoal())
+	tl.SetGoalJudge(func(context.Context, string) (string, bool) {
+		judgements++
+		return `{"verdict":"met"}`, true
+	})
+	params := map[string]any{
+		"summary":  "done",
+		"evidence": []any{map[string]any{"kind": "file", "path": "a.go"}},
+	}
+	if _, err := tl.Execute(context.Background(), params); err != nil {
+		t.Fatalf("first: %v", err)
+	}
+	out, err := tl.Execute(context.Background(), params)
+	if err != nil {
+		t.Fatalf("second: %v", err)
+	}
+	if posts != 1 || judgements != 1 {
+		t.Fatalf("posts = %d, judgements = %d; want one of each", posts, judgements)
+	}
+	if !strings.Contains(out, "已经提交") {
+		t.Errorf("second call answered %q", out)
+	}
+
+	// A new round resets the guard.
+	gc := judgeGoal()
+	gc.Round++
+	tl.SetGoalContext(gc)
+	if _, err := tl.Execute(context.Background(), params); err != nil {
+		t.Fatalf("next round: %v", err)
+	}
+	if posts != 2 {
+		t.Fatalf("posts = %d, want 2 after the round advanced", posts)
+	}
+}
