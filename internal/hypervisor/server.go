@@ -89,7 +89,7 @@ func (s *Server) SetTerminalManager(m *TerminalManager) *Server {
 func (s *Server) Start(ctx context.Context) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "version": Version})
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "version": Version, "os": Platform()})
 	})
 	mux.HandleFunc("GET /api/v1/files/{agentID}", s.handleListFiles)
 	mux.HandleFunc("GET /api/v1/files/{agentID}/content", s.handleFileContent)
