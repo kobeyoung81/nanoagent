@@ -488,7 +488,10 @@ func runAgent(userID string, bindingID int64, agentID, busURL string, readyFD in
 		// other tool so the model sees one surface; it refuses outside a goal
 		// round, which is every turn until the scheduler ships.
 		if keep("goal_report") {
-			registry.Register(tool.NewGoalReportTool())
+			registry.Register(tool.NewGoalReportTool(tool.GoalReportOptions{
+				WorkspaceURL: config.WorkspaceURL(),
+				Token:        config.InternalToken(),
+			}))
 		}
 		if keep("download_media") && cfg.Media.CorpID != "" && cfg.Media.CorpSecret != "" {
 			registry.Register(tool.NewMediaDownloadTool(

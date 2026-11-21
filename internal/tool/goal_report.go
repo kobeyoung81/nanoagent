@@ -229,13 +229,14 @@ func (t *GoalReportTool) Execute(ctx context.Context, params map[string]any) (st
 	verdict, reason, missing := parseVerdict(raw)
 	report.Verdict, report.Reason, report.Missing = verdict, reason, missing
 
-	// Without a configured workspace the report cannot be delivered; that only
-	// happens in tests, and the caller still gets the verdict so the tool stays
-	// exercisable without an HTTP server.
-	if t.workspaceURL != "" {
-		if err := t.post(ctx, report); err != nil {
-			return "", fmt.Errorf("the report was judged but not delivered: %w", err)
-		}
+	// A judged report that is not delivered is a lost round, not a success: the
+	// scheduler would re-dispatch the same round after the claim expires. An
+	// unconfigured URL therefore fails instead of returning quietly.
+	if t.workspaceURL == "" {
+		return "", fmt.Errorf("goal_report is unavailable: the workspace url is not configured")
+	}
+	if err := t.post(ctx, report); err != nil {
+		return "", fmt.Errorf("the report was judged but not delivered: %w", err)
 	}
 	return fmt.Sprintf("第 %d 轮报告已提交，判定：%s。%s", gc.Round+1, verdict, reason), nil
 }

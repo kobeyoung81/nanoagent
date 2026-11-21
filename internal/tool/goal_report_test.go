@@ -2,6 +2,8 @@ package tool
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -89,9 +91,14 @@ func TestGoalReport_L1Checks(t *testing.T) {
 // TestGoalReport_NormalisesTheReport covers the happy path: the binding is
 // stamped on and all three evidence shapes survive the round trip.
 func TestGoalReport_NormalisesTheReport(t *testing.T) {
-	tl := NewGoalReportTool()
-	tl.SetGoalContext(goalRound())
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
 	var judged string
+	tl := NewGoalReportTool(GoalReportOptions{WorkspaceURL: srv.URL, Token: "t"})
+	tl.SetGoalContext(goalRound())
 	tl.SetGoalJudge(func(_ context.Context, input string) (string, bool) {
 		judged = input
 		return `{"verdict":"not_yet","reason":"four call sites left","missing":["middleware.go"]}`, true
