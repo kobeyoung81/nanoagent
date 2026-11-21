@@ -488,6 +488,10 @@ func runAgent(userID string, bindingID int64, agentID, busURL string, readyFD in
 		// other tool so the model sees one surface; it refuses outside a goal
 		// round, which is every turn until the scheduler ships.
 		if keep("goal_report") {
+			// The intake turn (a normal conversation turn) writes answers back
+			// into the draft it is filling. It ships with the report tool: both
+			// belong to the same feature switch.
+			registry.Register(tool.NewGoalIntakeTool(userID, config.WorkspaceURL()))
 			registry.Register(tool.NewGoalReportTool(tool.GoalReportOptions{
 				WorkspaceURL: config.WorkspaceURL(),
 				Token:        config.InternalToken(),
