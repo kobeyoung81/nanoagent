@@ -11,7 +11,7 @@ const DefaultWorkspaceURL = "http://nanoworkspace:8080"
 
 // WorkspaceURL returns the workspace module's base URL.
 //
-// The agent needs it for two things: creating a goal from the /goal command and
+// The agent needs it for two things: writing an intake answer into a goal draft and
 // posting a round report. Both carry the platform internal token, because a
 // container has no browser session.
 func WorkspaceURL() string {

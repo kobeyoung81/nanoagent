@@ -170,6 +170,19 @@ func (r *Registry) SetGoalContext(c GoalContext) {
 	}
 }
 
+// SetIntakeContext forwards the turn's draft binding to every registered tool
+// that writes one. Outside an intake turn the zero value is forwarded, so a
+// write refuses instead of landing in the previous turn's draft.
+func (r *Registry) SetIntakeContext(c IntakeContext) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, t := range r.tools {
+		if it, ok := t.(IntakeContextTool); ok {
+			it.SetIntakeContext(c)
+		}
+	}
+}
+
 // GoalJudgeTool is implemented by tools that judge a goal round through the
 // agent's utility path (e.g. GoalReportTool).
 type GoalJudgeTool interface {

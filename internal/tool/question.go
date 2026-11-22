@@ -22,6 +22,10 @@ type QuestionWaiter interface {
 // in its metadata; the agent poll loop routes it to the broker.
 type QuestionTool struct {
 	broker QuestionWaiter
+	// writer + binder are set on an intake turn: a question that names a check
+	// writes its answer into the draft the turn is filling.
+	writer *DraftWriter
+	binder *intakeBinder
 
 	mu        sync.RWMutex
 	sessionID string
@@ -34,6 +38,20 @@ type QuestionTool struct {
 // NewQuestionTool creates a QuestionTool backed by the given broker.
 func NewQuestionTool(broker QuestionWaiter) *QuestionTool {
 	return &QuestionTool{broker: broker}
+}
+
+// NewQuestionToolWithIntake adds the intake writer: answers to questions that
+// carry a check land in the goal draft without another model round.
+func NewQuestionToolWithIntake(broker QuestionWaiter, writer *DraftWriter, binder *intakeBinder) *QuestionTool {
+	return &QuestionTool{broker: broker, writer: writer, binder: binder}
+}
+
+// SetIntakeContext implements IntakeContextTool: the question tool writes into
+// the same bound draft as goal_intake_answer.
+func (t *QuestionTool) SetIntakeContext(c IntakeContext) {
+	if t.binder != nil {
+		t.binder.set(c)
+	}
 }
 
 // SetHeadless implements HeadlessTool.
@@ -107,7 +125,8 @@ func (t *QuestionTool) RawParameters() []byte {
             }
           },
           "multiple": {"type": "boolean", "description": "Allow selecting more than one option"},
-          "custom": {"type": "boolean", "description": "Also allow a free-text answer; the card shows a free-text field next to the options"}
+          "custom": {"type": "boolean", "description": "Also allow a free-text answer; the card shows a free-text field next to the options"},
+          "check": {"type": "string", "enum": ["condition", "proof", "approach", "constraints", "budget"], "description": "Goal-intake only: the draft field this question fills. The answer is saved as soon as the user submits, so ask up to three of these per round and do not call goal_intake_answer for them"}
         },
         "required": ["question"]
       }
@@ -144,7 +163,52 @@ func (t *QuestionTool) Execute(ctx context.Context, params map[string]any) (stri
 		return "The user did not provide an answer.", nil
 	}
 	out, _ := json.Marshal(answers)
+	if note := t.writeMarkedAnswers(ctx, id, params, answers); note != "" {
+		return string(out) + "\n\n" + note, nil
+	}
 	return string(out), nil
+}
+
+// writeMarkedAnswers saves the answers of the questions that named a check.
+//
+// One write per round, and the result is handed back to the model as part of the
+// tool output: without it the model would have to ask again whether the answers
+// landed, which is exactly the loop that filled the transcript with the same
+// three questions.
+func (t *QuestionTool) writeMarkedAnswers(ctx context.Context, id string, params map[string]any, answers []string) string {
+	if t.writer == nil || t.binder == nil {
+		return ""
+	}
+	draft := t.binder.get().DraftID
+	if draft == "" {
+		return ""
+	}
+	raw, err := json.Marshal(params["questions"])
+	if err != nil {
+		return ""
+	}
+	req, ok := ParseQuestions(id, `{"questions":`+string(raw)+`}`)
+	if !ok {
+		return ""
+	}
+	marked := make([]DraftAnswer, 0, len(req.Questions))
+	for i, q := range req.Questions {
+		if q.Check == "" || i >= len(answers) {
+			continue
+		}
+		if strings.TrimSpace(answers[i]) == "" {
+			continue
+		}
+		marked = append(marked, DraftAnswer{Check: q.Check, Value: answers[i]})
+	}
+	if len(marked) == 0 {
+		return ""
+	}
+	note, err := t.writer.Write(ctx, draft, marked)
+	if err != nil {
+		return "写入草稿失败：" + err.Error()
+	}
+	return note
 }
 
 // ExceedsGuidanceCaps reports whether a parsed call went past the guidance

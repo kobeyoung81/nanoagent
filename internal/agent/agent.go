@@ -1032,14 +1032,6 @@ func (a *Agent) Run(ctx context.Context) error {
 				continue
 			}
 
-			// /goal starts a long-running goal from one line; it is a command,
-			// not a turn, so the transcript does not grow a user message the
-			// model would then have to answer.
-			if desc, ok := parseGoalCommand(msg.Content); ok {
-				go a.handleGoalCommand(ctx, msg, desc)
-				continue
-			}
-
 			// Route an answer to a waiting question instead of starting a turn.
 			if a.questions != nil {
 				if qid, _ := msg.Metadata["question_id"].(string); qid != "" {

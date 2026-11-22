@@ -23,6 +23,11 @@ type Question struct {
 	Options  []Option `json:"options,omitempty"`
 	Multiple bool     `json:"multiple,omitempty"`
 	Custom   bool     `json:"custom,omitempty"`
+	// Check names the goal-draft field this question fills (condition, proof,
+	// approach, constraints, budget). Empty for an ordinary question; when it is
+	// set on an intake turn the answer is written into the draft as soon as the
+	// user submits, so filling six fields is not six model round trips.
+	Check string `json:"check,omitempty"`
 }
 
 // Request is the payload of a question chunk and the pending-question metadata.

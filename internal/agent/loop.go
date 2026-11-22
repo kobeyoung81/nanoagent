@@ -188,6 +188,9 @@ func (a *Agent) processMessage(ctx context.Context, msg *nanoprotocol.InboundMes
 	// verification round. Outside a goal round this is the zero value, so the
 	// report tool refuses instead of writing into a stale goal.
 	a.tools.SetGoalContext(goalContextOf(msg))
+	// An intake turn binds the draft it fills. It is a normal turn (nobody is
+	// away), so it cannot ride the goal binding above.
+	a.tools.SetIntakeContext(intakeContextOf(msg))
 
 	// A task names its conversation on its first run: the task name is a better
 	// entry in the conversation list than the truncated instruction, and a
