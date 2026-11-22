@@ -79,10 +79,16 @@ func (t *GoalReportTool) SetGoalJudge(fn func(ctx context.Context, input string)
 }
 
 // SetGoalContext implements GoalContextTool.
+//
+// A new round may report again. The verification round is a new round even
+// though it keeps the counter, so `Verify` is part of the identity here: without
+// it the tool answered "this round's report is already in" to the one round whose
+// whole job is to submit one, and the goal sat in verifying until its budget ran
+// out.
 func (t *GoalReportTool) SetGoalContext(c GoalContext) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if c.GoalID != t.ctx.GoalID || c.Round != t.ctx.Round {
+	if c.GoalID != t.ctx.GoalID || c.Round != t.ctx.Round || c.Verify != t.ctx.Verify {
 		t.reported = false
 	}
 	t.ctx = c

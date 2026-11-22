@@ -189,3 +189,70 @@ func TestGoalReport_SecondCallIsHarmless(t *testing.T) {
 		t.Fatalf("posts = %d, want 2 after the round advanced", posts)
 	}
 }
+
+// TestGoalReport_VerificationRoundMayReport covers the round whose only job is
+// to report: it keeps the round number, so counting "one report per round"
+// without the verify flag refused it and the goal stayed in verifying.
+func TestGoalReport_VerificationRoundMayReport(t *testing.T) {
+	posts := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		posts++
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"achieved"}`))
+	}))
+	defer srv.Close()
+
+	tl := NewGoalReportTool(GoalReportOptions{WorkspaceURL: srv.URL, Token: "internal"})
+	tl.SetGoalJudge(func(context.Context, string) (string, bool) {
+		return `{"verdict":"met","reason":"ok"}`, true
+	})
+	report := map[string]any{
+		"summary":  "done",
+		"evidence": []any{map[string]any{"kind": "command", "cmd": "ls", "exit": float64(0)}},
+	}
+
+	work := judgeGoal()
+	tl.SetGoalContext(work)
+	if _, err := tl.Execute(context.Background(), report); err != nil {
+		t.Fatalf("work round: %v", err)
+	}
+
+	// The same round number, this time the verification.
+	verify := work
+	verify.Verify = true
+	tl.SetGoalContext(verify)
+	if _, err := tl.Execute(context.Background(), report); err != nil {
+		t.Fatalf("verify round: %v", err)
+	}
+	if posts != 2 {
+		t.Fatalf("the verification round's report was not delivered: posts=%d", posts)
+	}
+}
+
+// TestGoalReport_SameRoundTwiceIsStillRefused keeps the guard the flag above
+// relaxes: a model that calls goal_report twice in one round only sends once.
+func TestGoalReport_SameRoundTwiceIsStillRefused(t *testing.T) {
+	posts := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		posts++
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"running"}`))
+	}))
+	defer srv.Close()
+
+	tl := NewGoalReportTool(GoalReportOptions{WorkspaceURL: srv.URL, Token: "internal"})
+	tl.SetGoalJudge(func(context.Context, string) (string, bool) {
+		return `{"verdict":"not_yet","reason":"not done"}`, true
+	})
+	tl.SetGoalContext(judgeGoal())
+	report := map[string]any{"summary": "partly", "evidence": []any{map[string]any{"kind": "command", "cmd": "ls", "exit": float64(0)}}}
+	if _, err := tl.Execute(context.Background(), report); err != nil {
+		t.Fatalf("first: %v", err)
+	}
+	if _, err := tl.Execute(context.Background(), report); err != nil {
+		t.Fatalf("second: %v", err)
+	}
+	if posts != 1 {
+		t.Fatalf("a second report in the same round was delivered: posts=%d", posts)
+	}
+}
