@@ -21,18 +21,11 @@ import (
 // allowed, and only matters when a turn carries no binding.
 type GoalIntakeTool struct {
 	writer *DraftWriter
-	binder *intakeBinder
 }
 
 // NewGoalIntakeTool creates the tool for one account.
-func NewGoalIntakeTool(writer *DraftWriter, binder *intakeBinder) *GoalIntakeTool {
-	return &GoalIntakeTool{writer: writer, binder: binder}
-}
-
-// NewStandaloneGoalIntakeTool builds the tool with its own binder, for callers
-// (tests, single-tool registries) that never bind a draft.
-func NewStandaloneGoalIntakeTool(writer *DraftWriter) *GoalIntakeTool {
-	return &GoalIntakeTool{writer: writer, binder: &intakeBinder{}}
+func NewGoalIntakeTool(writer *DraftWriter) *GoalIntakeTool {
+	return &GoalIntakeTool{writer: writer}
 }
 
 func (t *GoalIntakeTool) Name() string { return "goal_intake_answer" }
@@ -90,21 +83,18 @@ func (t *GoalIntakeTool) RawParameters() []byte {
 }`)
 }
 
-// SetIntakeContext implements IntakeContextTool.
-func (t *GoalIntakeTool) SetIntakeContext(c IntakeContext) {
-	if t.binder != nil {
-		t.binder.set(c)
-	}
-}
-
 func (t *GoalIntakeTool) Execute(ctx context.Context, params map[string]any) (string, error) {
 	answers, err := intakeAnswers(params)
 	if err != nil {
 		return "", err
 	}
 	draftID := strings.TrimSpace(stringField(params, "draft_id"))
-	if draftID == "" && t.binder != nil {
-		draftID = t.binder.get().DraftID
+	if draftID == "" {
+		// The draft the turn was started with. It is on the turn, not on the
+		// tool, because several turns run at once.
+		if turn := TurnFrom(ctx); turn != nil {
+			draftID = turn.Intake.DraftID
+		}
 	}
 	if draftID == "" {
 		return "", fmt.Errorf("no draft is bound to this turn; the user must reopen 「设定长程目标」")

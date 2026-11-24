@@ -30,8 +30,8 @@ func TestGoalReport_RequiresAGoalRound(t *testing.T) {
 // agent a second way to end a goal.
 func TestGoalReport_RejectsInterrupted(t *testing.T) {
 	tl := NewGoalReportTool()
-	tl.SetGoalContext(goalRound())
-	_, err := tl.Execute(context.Background(), map[string]any{
+	ctx := turnCtx(goalRound(), IntakeContext{})
+	_, err := tl.Execute(ctx, map[string]any{
 		"summary":  "stopped early",
 		"evidence": []any{map[string]any{"kind": "interrupted", "note": "ran out of time"}},
 	})
@@ -44,7 +44,7 @@ func TestGoalReport_RejectsInterrupted(t *testing.T) {
 // these would otherwise reach the judge as a claim nobody can check.
 func TestGoalReport_L1Checks(t *testing.T) {
 	tl := NewGoalReportTool()
-	tl.SetGoalContext(goalRound())
+	ctx := turnCtx(goalRound(), IntakeContext{})
 
 	cases := []struct {
 		name   string
@@ -80,7 +80,7 @@ func TestGoalReport_L1Checks(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := tl.Execute(context.Background(), tc.params)
+			_, err := tl.Execute(ctx, tc.params)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("err = %v, want %q", err, tc.want)
 			}
@@ -98,12 +98,12 @@ func TestGoalReport_NormalisesTheReport(t *testing.T) {
 
 	var judged string
 	tl := NewGoalReportTool(GoalReportOptions{WorkspaceURL: srv.URL, Token: "t"})
-	tl.SetGoalContext(goalRound())
+	ctx := turnCtx(goalRound(), IntakeContext{})
 	tl.SetGoalJudge(func(_ context.Context, input string) (string, bool) {
 		judged = input
 		return `{"verdict":"not_yet","reason":"four call sites left","missing":["middleware.go"]}`, true
 	})
-	out, err := tl.Execute(context.Background(), map[string]any{
+	out, err := tl.Execute(ctx, map[string]any{
 		"summary": "  auth token migrated  ",
 		"evidence": []any{
 			map[string]any{"kind": "command", "cmd": "go build ./...", "exit": float64(0), "tail": "ok"},

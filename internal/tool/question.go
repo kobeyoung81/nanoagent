@@ -22,10 +22,10 @@ type QuestionWaiter interface {
 // in its metadata; the agent poll loop routes it to the broker.
 type QuestionTool struct {
 	broker QuestionWaiter
-	// writer + binder are set on an intake turn: a question that names a check
-	// writes its answer into the draft the turn is filling.
+	// writer is set when the goal surfaces are on: a question that names a
+	// check writes its answer into the draft the turn is filling (the draft
+	// itself comes from the turn, see turn.go).
 	writer *DraftWriter
-	binder *intakeBinder
 
 	mu        sync.RWMutex
 	sessionID string
@@ -42,16 +42,8 @@ func NewQuestionTool(broker QuestionWaiter) *QuestionTool {
 
 // NewQuestionToolWithIntake adds the intake writer: answers to questions that
 // carry a check land in the goal draft without another model round.
-func NewQuestionToolWithIntake(broker QuestionWaiter, writer *DraftWriter, binder *intakeBinder) *QuestionTool {
-	return &QuestionTool{broker: broker, writer: writer, binder: binder}
-}
-
-// SetIntakeContext implements IntakeContextTool: the question tool writes into
-// the same bound draft as goal_intake_answer.
-func (t *QuestionTool) SetIntakeContext(c IntakeContext) {
-	if t.binder != nil {
-		t.binder.set(c)
-	}
+func NewQuestionToolWithIntake(broker QuestionWaiter, writer *DraftWriter) *QuestionTool {
+	return &QuestionTool{broker: broker, writer: writer}
 }
 
 // SetHeadless implements HeadlessTool.
@@ -176,13 +168,14 @@ func (t *QuestionTool) Execute(ctx context.Context, params map[string]any) (stri
 // landed, which is exactly the loop that filled the transcript with the same
 // three questions.
 func (t *QuestionTool) writeMarkedAnswers(ctx context.Context, id string, params map[string]any, answers []string) string {
-	if t.writer == nil || t.binder == nil {
+	if t.writer == nil {
 		return ""
 	}
-	draft := t.binder.get().DraftID
-	if draft == "" {
+	turn := TurnFrom(ctx)
+	if turn == nil || turn.Intake.DraftID == "" {
 		return ""
 	}
+	draft := turn.Intake.DraftID
 	raw, err := json.Marshal(params["questions"])
 	if err != nil {
 		return ""

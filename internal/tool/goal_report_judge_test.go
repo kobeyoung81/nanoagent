@@ -32,7 +32,7 @@ func TestGoalReport_PostsTheVerdict(t *testing.T) {
 	defer srv.Close()
 
 	tl := NewGoalReportTool(GoalReportOptions{WorkspaceURL: srv.URL, Token: "internal"})
-	tl.SetGoalContext(judgeGoal())
+	ctx := turnCtx(judgeGoal(), IntakeContext{})
 	tl.SetGoalJudge(func(_ context.Context, input string) (string, bool) {
 		if !strings.Contains(input, "所有测试通过") {
 			t.Errorf("the judge did not receive the condition:\n%s", input)
@@ -40,7 +40,7 @@ func TestGoalReport_PostsTheVerdict(t *testing.T) {
 		return `{"verdict":"met","reason":"tests pass"}`, true
 	})
 
-	out, err := tl.Execute(context.Background(), map[string]any{
+	out, err := tl.Execute(ctx, map[string]any{
 		"summary":  "all green",
 		"evidence": []any{map[string]any{"kind": "command", "cmd": "go build ./...", "exit": float64(0)}},
 	})
@@ -113,8 +113,8 @@ func TestSplitInstruction(t *testing.T) {
 // TestGoalReport_RefusesWithoutAJudge keeps the tool from self-certifying.
 func TestGoalReport_RefusesWithoutAJudge(t *testing.T) {
 	tl := NewGoalReportTool()
-	tl.SetGoalContext(judgeGoal())
-	_, err := tl.Execute(context.Background(), map[string]any{
+	ctx := turnCtx(judgeGoal(), IntakeContext{})
+	_, err := tl.Execute(ctx, map[string]any{
 		"summary":  "done",
 		"evidence": []any{map[string]any{"kind": "file", "path": "a.go"}},
 	})
@@ -131,9 +131,9 @@ func TestGoalReport_DeliveryFailureIsReported(t *testing.T) {
 	}))
 	defer srv.Close()
 	tl := NewGoalReportTool(GoalReportOptions{WorkspaceURL: srv.URL, Token: "t"})
-	tl.SetGoalContext(judgeGoal())
+	ctx := turnCtx(judgeGoal(), IntakeContext{})
 	tl.SetGoalJudge(func(context.Context, string) (string, bool) { return `{"verdict":"not_yet"}`, true })
-	_, err := tl.Execute(context.Background(), map[string]any{
+	_, err := tl.Execute(ctx, map[string]any{
 		"summary":  "done",
 		"evidence": []any{map[string]any{"kind": "file", "path": "a.go"}},
 	})
@@ -155,7 +155,7 @@ func TestGoalReport_SecondCallIsHarmless(t *testing.T) {
 
 	var judgements int
 	tl := NewGoalReportTool(GoalReportOptions{WorkspaceURL: srv.URL, Token: "t"})
-	tl.SetGoalContext(judgeGoal())
+	ctx := turnCtx(judgeGoal(), IntakeContext{})
 	tl.SetGoalJudge(func(context.Context, string) (string, bool) {
 		judgements++
 		return `{"verdict":"met"}`, true
@@ -164,10 +164,10 @@ func TestGoalReport_SecondCallIsHarmless(t *testing.T) {
 		"summary":  "done",
 		"evidence": []any{map[string]any{"kind": "file", "path": "a.go"}},
 	}
-	if _, err := tl.Execute(context.Background(), params); err != nil {
+	if _, err := tl.Execute(ctx, params); err != nil {
 		t.Fatalf("first: %v", err)
 	}
-	out, err := tl.Execute(context.Background(), params)
+	out, err := tl.Execute(ctx, params)
 	if err != nil {
 		t.Fatalf("second: %v", err)
 	}
@@ -178,11 +178,10 @@ func TestGoalReport_SecondCallIsHarmless(t *testing.T) {
 		t.Errorf("second call answered %q", out)
 	}
 
-	// A new round resets the guard.
+	// A new round is a new turn, so the guard starts clean.
 	gc := judgeGoal()
 	gc.Round++
-	tl.SetGoalContext(gc)
-	if _, err := tl.Execute(context.Background(), params); err != nil {
+	if _, err := tl.Execute(turnCtx(gc, IntakeContext{}), params); err != nil {
 		t.Fatalf("next round: %v", err)
 	}
 	if posts != 2 {
@@ -212,16 +211,17 @@ func TestGoalReport_VerificationRoundMayReport(t *testing.T) {
 	}
 
 	work := judgeGoal()
-	tl.SetGoalContext(work)
-	if _, err := tl.Execute(context.Background(), report); err != nil {
+	workCtx := turnCtx(work, IntakeContext{})
+	if _, err := tl.Execute(workCtx, report); err != nil {
 		t.Fatalf("work round: %v", err)
 	}
 
-	// The same round number, this time the verification.
+	// The same round number in a new turn: the verification has its own binding,
+	// so the work round's delivery must not silence it.
 	verify := work
 	verify.Verify = true
-	tl.SetGoalContext(verify)
-	if _, err := tl.Execute(context.Background(), report); err != nil {
+	verifyCtx := turnCtx(verify, IntakeContext{})
+	if _, err := tl.Execute(verifyCtx, report); err != nil {
 		t.Fatalf("verify round: %v", err)
 	}
 	if posts != 2 {
@@ -244,12 +244,12 @@ func TestGoalReport_SameRoundTwiceIsStillRefused(t *testing.T) {
 	tl.SetGoalJudge(func(context.Context, string) (string, bool) {
 		return `{"verdict":"not_yet","reason":"not done"}`, true
 	})
-	tl.SetGoalContext(judgeGoal())
+	ctx := turnCtx(judgeGoal(), IntakeContext{})
 	report := map[string]any{"summary": "partly", "evidence": []any{map[string]any{"kind": "command", "cmd": "ls", "exit": float64(0)}}}
-	if _, err := tl.Execute(context.Background(), report); err != nil {
+	if _, err := tl.Execute(ctx, report); err != nil {
 		t.Fatalf("first: %v", err)
 	}
-	if _, err := tl.Execute(context.Background(), report); err != nil {
+	if _, err := tl.Execute(ctx, report); err != nil {
 		t.Fatalf("second: %v", err)
 	}
 	if posts != 1 {

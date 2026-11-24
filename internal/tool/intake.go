@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -159,31 +158,4 @@ func sortStrings(items []string) {
 			items[j], items[j-1] = items[j-1], items[j]
 		}
 	}
-}
-
-// intakeBinder is the per-turn draft id, shared by the two tools that write.
-//
-// It lives here rather than on each tool because a round may be filled by both:
-// the question tool writes what its marked questions collected, and the tool
-// writes whatever the model could not attach to a question.
-type intakeBinder struct {
-	mu    sync.Mutex
-	draft IntakeContext
-}
-
-// NewIntakeBinder builds the per-turn binding both intake tools share.
-func NewIntakeBinder() *intakeBinder {
-	return &intakeBinder{}
-}
-
-func (b *intakeBinder) set(c IntakeContext) {
-	b.mu.Lock()
-	b.draft = c
-	b.mu.Unlock()
-}
-
-func (b *intakeBinder) get() IntakeContext {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.draft
 }

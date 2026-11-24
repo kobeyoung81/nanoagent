@@ -1,7 +1,6 @@
 package tool
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -60,11 +59,10 @@ func TestGoalIntakeTool_PostsTheWholeRound(t *testing.T) {
 	defer srv.Close()
 
 	writer := NewDraftWriter(srv.URL, "u1", "internal")
-	binder := NewIntakeBinder()
-	binder.set(IntakeContext{DraftID: "g_1"})
-	tl := NewGoalIntakeTool(writer, binder)
+	tl := NewGoalIntakeTool(writer)
+	ctx := turnCtx(GoalContext{}, IntakeContext{DraftID: "g_1"})
 
-	out, err := tl.Execute(context.Background(), map[string]any{"answers": []any{
+	out, err := tl.Execute(ctx, map[string]any{"answers": []any{
 		map[string]any{"check": "proof", "value": "a\nb"},
 		map[string]any{"check": "budget", "value": "3 轮 / 10 分钟"},
 	}})
@@ -83,8 +81,8 @@ func TestGoalIntakeTool_PostsTheWholeRound(t *testing.T) {
 }
 
 func TestGoalIntakeTool_RefusesWithoutABinding(t *testing.T) {
-	tl := NewStandaloneGoalIntakeTool(NewDraftWriter("http://example.invalid", "u1", ""))
-	if _, err := tl.Execute(context.Background(), map[string]any{
+	tl := NewGoalIntakeTool(NewDraftWriter("http://example.invalid", "u1", ""))
+	if _, err := tl.Execute(turnCtx(GoalContext{}, IntakeContext{}), map[string]any{
 		"answers": []any{map[string]any{"check": "proof", "value": "x"}},
 	}); err == nil {
 		t.Fatal("a write without a draft must be refused")
@@ -106,14 +104,12 @@ func TestQuestionToolWritesMarkedAnswers(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	binder := NewIntakeBinder()
-	binder.set(IntakeContext{DraftID: "g_7"})
-	tl := NewQuestionToolWithIntake(nil, NewDraftWriter(srv.URL, "u1", ""), binder)
+	tl := NewQuestionToolWithIntake(nil, NewDraftWriter(srv.URL, "u1", ""))
 	params := map[string]any{"questions": []any{
 		map[string]any{"question": "证据怎么给？", "check": "proof"},
 		map[string]any{"question": "叫什么名字？"},
 	}}
-	note := tl.writeMarkedAnswers(context.Background(), "q1", params, []string{"cat a.txt", "随便"})
+	note := tl.writeMarkedAnswers(turnCtx(GoalContext{}, IntakeContext{DraftID: "g_7"}), "q1", params, []string{"cat a.txt", "随便"})
 	if writes != 1 {
 		t.Fatalf("writes = %d, want 1 (one round, one write)", writes)
 	}
@@ -130,7 +126,7 @@ func TestQuestionToolWritesMarkedAnswers(t *testing.T) {
 func TestQuestionToolWithoutIntakeDoesNotWrite(t *testing.T) {
 	tl := NewQuestionTool(nil)
 	params := map[string]any{"questions": []any{map[string]any{"question": "q", "check": "proof"}}}
-	if note := tl.writeMarkedAnswers(context.Background(), "q1", params, []string{"a"}); note != "" {
+	if note := tl.writeMarkedAnswers(turnCtx(GoalContext{}, IntakeContext{DraftID: "g_7"}), "q1", params, []string{"a"}); note != "" {
 		t.Fatalf("note = %q, want none", note)
 	}
 }

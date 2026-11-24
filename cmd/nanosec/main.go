@@ -481,14 +481,13 @@ func runAgent(userID string, bindingID int64, agentID, busURL string, readyFD in
 		if keep("plan_execute") {
 			registry.Register(tool.NewPlanExecuteTool(ws, sh))
 		}
-		// The intake turn writes answers into one goal draft. One writer and one
-		// binding are shared by the two tools that can write: the question tool
-		// (answers to questions that name a check) and goal_intake_answer (the
-		// rest). See tool/intake.go.
+		// The intake turn writes answers into one goal draft. One writer is shared
+		// by the two tools that can write: the question tool (answers to
+		// questions that name a check) and goal_intake_answer (the rest). The
+		// draft itself travels with the turn (see tool/turn.go).
 		intakeWriter := tool.NewDraftWriter(config.WorkspaceURL(), userID, config.InternalToken())
-		intakeBind := tool.NewIntakeBinder()
 		if keep("question") {
-			registry.Register(tool.NewQuestionToolWithIntake(qBroker, intakeWriter, intakeBind))
+			registry.Register(tool.NewQuestionToolWithIntake(qBroker, intakeWriter))
 		}
 		// The report that ends a long-running goal's round. Registered like any
 		// other tool so the model sees one surface; it refuses outside a goal
@@ -497,7 +496,7 @@ func runAgent(userID string, bindingID int64, agentID, busURL string, readyFD in
 			// The intake turn (a normal conversation turn) writes answers back
 			// into the draft it is filling. It ships with the report tool: both
 			// belong to the same feature switch.
-			registry.Register(tool.NewGoalIntakeTool(intakeWriter, intakeBind))
+			registry.Register(tool.NewGoalIntakeTool(intakeWriter))
 			registry.Register(tool.NewGoalReportTool(tool.GoalReportOptions{
 				WorkspaceURL: config.WorkspaceURL(),
 				Token:        config.InternalToken(),

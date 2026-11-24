@@ -23,8 +23,7 @@ import (
 // turns the evidence into one of three verdicts. The report then goes back to
 // the workspace, which owns the goal state.
 type GoalReportTool struct {
-	mu  sync.Mutex
-	ctx GoalContext
+	mu sync.Mutex
 
 	// judge runs the goal_judge utility. nil means the utility is not
 	// registered, and the tool refuses rather than self-certifying.
@@ -33,11 +32,6 @@ type GoalReportTool struct {
 	workspaceURL string
 	token        string
 	http         *http.Client
-
-	// reported marks the current round as delivered. A model that calls the
-	// tool twice in one round would otherwise send a report for a round the host
-	// has already advanced, and get a 409 that looks like a failure.
-	reported bool
 }
 
 // GoalReportOptions is where a report is posted.
@@ -76,42 +70,6 @@ func (t *GoalReportTool) SetGoalJudge(fn func(ctx context.Context, input string)
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.judge = fn
-}
-
-// SetGoalContext implements GoalContextTool.
-//
-// A new round may report again. The verification round is a new round even
-// though it keeps the counter, so `Verify` is part of the identity here: without
-// it the tool answered "this round's report is already in" to the one round whose
-// whole job is to submit one, and the goal sat in verifying until its budget ran
-// out.
-func (t *GoalReportTool) SetGoalContext(c GoalContext) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if c.GoalID != t.ctx.GoalID || c.Round != t.ctx.Round || c.Verify != t.ctx.Verify {
-		t.reported = false
-	}
-	t.ctx = c
-}
-
-// alreadyReported reports whether this round's report has been delivered.
-func (t *GoalReportTool) alreadyReported() bool {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.reported
-}
-
-func (t *GoalReportTool) markReported() {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.reported = true
-}
-
-// context returns the current binding, or the zero value outside a goal round.
-func (t *GoalReportTool) context() GoalContext {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.ctx
 }
 
 func (t *GoalReportTool) judgeFunc() func(context.Context, string) (string, bool) {
@@ -233,12 +191,20 @@ var evidenceKinds = map[string]bool{
 }
 
 func (t *GoalReportTool) Execute(ctx context.Context, params map[string]any) (string, error) {
-	gc := t.context()
-	if gc.GoalID == "" {
+	turn := TurnFrom(ctx)
+	if turn == nil || turn.Goal.GoalID == "" {
 		return "", fmt.Errorf("goal_report is only available inside a long-running goal round")
 	}
-	if t.alreadyReported() {
-		return fmt.Sprintf("第 %d 轮的报告已经提交过了，无需重复。", gc.Round+1), nil
+	gc := turn.Goal
+	if turn.GoalReported() {
+		// Name the phase: the verification round keeps the round number, so
+		// "第 N 轮的报告已经提交过了" read like a rejection of new evidence when
+		// it was the same phase reporting twice.
+		phase := "工作"
+		if gc.Verify {
+			phase = "复验"
+		}
+		return fmt.Sprintf("第 %d 轮的%s报告已经提交过，不必重复提交。", gc.Round+1, phase), nil
 	}
 	report, err := parseReport(params)
 	if err != nil {
@@ -268,8 +234,12 @@ func (t *GoalReportTool) Execute(ctx context.Context, params map[string]any) (st
 	if err := t.post(ctx, report); err != nil {
 		return "", fmt.Errorf("the report was judged but not delivered: %w", err)
 	}
-	t.markReported()
-	return fmt.Sprintf("第 %d 轮报告已提交，判定：%s。%s", gc.Round+1, verdict, reason), nil
+	turn.MarkGoalReported()
+	phase := "工作"
+	if gc.Verify {
+		phase = "复验"
+	}
+	return fmt.Sprintf("第 %d 轮%s报告已提交，判定：%s。%s", gc.Round+1, phase, verdict, reason), nil
 }
 
 // judgeInput renders the four sections the judge prompt expects.
