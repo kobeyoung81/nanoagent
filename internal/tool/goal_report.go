@@ -40,6 +40,15 @@ type GoalReportOptions struct {
 	Token        string
 }
 
+// RoundNote is one earlier round as the judge is told about it: what was decided
+// and why. It is what makes the second round's judgement a continuation rather
+// than an isolated verdict.
+type RoundNote struct {
+	N       int    `json:"n"`
+	Verdict string `json:"verdict"`
+	Reason  string `json:"reason,omitempty"`
+}
+
 // GoalContext is the turn's goal binding, injected by the loop.
 //
 // It is per turn and per tool instance on purpose: the agent runs several
@@ -49,6 +58,10 @@ type GoalContext struct {
 	GoalID string
 	Round  int
 	Verify bool
+	// History is the last two rounds the scheduler already recorded, oldest
+	// first. Empty on the first round and for rounds dispatched by a version that
+	// did not send it.
+	History []RoundNote
 	// Instruction is the text this round was started with: the condition, the
 	// constraints and the context the scheduler injected. The judge reads it as
 	// the definition of "done".
@@ -190,6 +203,31 @@ var evidenceKinds = map[string]bool{
 	"list":    true,
 }
 
+// reportResult is what the tool returns to the model and to the transcript.
+//
+// It used to be a Chinese sentence, and the shell had to find the verdict by
+// matching words inside it. A structured answer is the contract: the reader gets
+// the verdict, the reason and the round without guessing, and a caller that only
+// wants the sentence reads `reason`.
+type reportResult struct {
+	Delivered bool   `json:"delivered"`
+	Verdict   string `json:"verdict,omitempty"`
+	Reason    string `json:"reason,omitempty"`
+	// Round is the number the reader sees (one-based), not the stored index.
+	Round  int  `json:"round,omitempty"`
+	Verify bool `json:"verify,omitempty"`
+}
+
+func (r reportResult) json() string {
+	raw, err := json.Marshal(r)
+	if err != nil {
+		// Every field is a string, an int or a bool: marshalling cannot fail. A
+		// fallback keeps the tool from returning an empty result if it ever does.
+		return fmt.Sprintf(`{"delivered":%t,"reason":"report recorded"}`, r.Delivered)
+	}
+	return string(raw)
+}
+
 func (t *GoalReportTool) Execute(ctx context.Context, params map[string]any) (string, error) {
 	turn := TurnFrom(ctx)
 	if turn == nil || turn.Goal.GoalID == "" {
@@ -204,7 +242,10 @@ func (t *GoalReportTool) Execute(ctx context.Context, params map[string]any) (st
 		if gc.Verify {
 			phase = "复验"
 		}
-		return fmt.Sprintf("第 %d 轮的%s报告已经提交过，不必重复提交。", gc.Round+1, phase), nil
+		return reportResult{
+			Delivered: false,
+			Reason:    fmt.Sprintf("第 %d 轮的%s报告已经提交过，不必重复提交。", gc.Round+1, phase),
+		}.json(), nil
 	}
 	report, err := parseReport(params)
 	if err != nil {
@@ -235,11 +276,13 @@ func (t *GoalReportTool) Execute(ctx context.Context, params map[string]any) (st
 		return "", fmt.Errorf("the report was judged but not delivered: %w", err)
 	}
 	turn.MarkGoalReported()
-	phase := "工作"
-	if gc.Verify {
-		phase = "复验"
-	}
-	return fmt.Sprintf("第 %d 轮%s报告已提交，判定：%s。%s", gc.Round+1, phase, verdict, reason), nil
+	return reportResult{
+		Delivered: true,
+		Verdict:   verdict,
+		Reason:    reason,
+		Round:     gc.Round + 1,
+		Verify:    gc.Verify,
+	}.json(), nil
 }
 
 // judgeInput renders the four sections the judge prompt expects.
@@ -286,7 +329,27 @@ func judgeInput(gc GoalContext, r Report) string {
 	if len(r.Remaining) > 0 {
 		fmt.Fprintf(&b, "remaining: %s\n", strings.Join(r.Remaining, "; "))
 	}
-	b.WriteString("\nRECENT\n(no earlier rounds are included)\n")
+	b.WriteString("\nRECENT\n")
+	b.WriteString(recentBlock(gc.History))
+	return b.String()
+}
+
+// recentBlock renders the earlier rounds the judge prompt asks for. N is stored
+// zero-based, so it is shown one-based like every other round number. A round
+// that recorded no reason still appears: "not_yet, no reason given" is itself
+// information about how that round ended.
+func recentBlock(history []RoundNote) string {
+	if len(history) == 0 {
+		return "(no earlier rounds)\n"
+	}
+	var b strings.Builder
+	for _, r := range history {
+		reason := strings.Join(strings.Fields(r.Reason), " ")
+		if reason == "" {
+			reason = "no reason recorded"
+		}
+		fmt.Fprintf(&b, "round %d: %s — %s\n", r.N+1, r.Verdict, reason)
+	}
 	return b.String()
 }
 
@@ -294,11 +357,33 @@ func judgeInput(gc GoalContext, r Report) string {
 // the scheduler injected. The wording is this platform's own, so the headings
 // are stable; an unrecognised shape keeps the whole text as the condition rather
 // than losing it.
+//
+// Two shapes are recognised: the briefing the scheduler writes today (目标 /
+// 要守住的边界) and the earlier one (判据（全部满足才算完成）：/ 约束：), because a
+// report can be filed for a round dispatched before an upgrade.
 func splitInstruction(instruction string) (condition, constraints string) {
 	text := strings.TrimSpace(instruction)
 	if text == "" {
 		return "(the round carried no instructions)", "(none)"
 	}
+	if i := strings.Index(text, "\n目标\n"); i >= 0 {
+		rest := text[i+len("\n目标\n"):]
+		condition, constraints = rest, "(none)"
+		if j := strings.Index(rest, "\n\n要守住的边界\n"); j >= 0 {
+			condition = rest[:j]
+			tail := rest[j+len("\n\n要守住的边界\n"):]
+			if k := strings.Index(tail, "\n\n"); k >= 0 {
+				tail = tail[:k]
+			}
+			if c := strings.TrimSpace(tail); c != "" {
+				constraints = c
+			}
+		} else if k := strings.Index(rest, "\n\n"); k >= 0 {
+			condition = rest[:k]
+		}
+		return strings.TrimSpace(condition), constraints
+	}
+
 	condition = text
 	constraints = "(see CONDITION)"
 

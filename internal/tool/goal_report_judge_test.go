@@ -12,8 +12,19 @@ import (
 func judgeGoal() GoalContext {
 	return GoalContext{
 		GoalID: "g_9", Round: 2,
-		Instruction: "【长程目标 · 第 3 轮】\n判据（全部满足才算完成）：\n所有测试通过\n\n约束：\n- 不改已有测试\n\n这一轮继续推进；结束时调用 goal_report 交结构化证据（命令要带退出码），没有证据不要声称完成。",
+		Instruction: "【长程目标 · 第 3 轮】\n\n目标\n所有测试通过\n\n要守住的边界\n- 不改已有测试\n\n这是第一轮：先确认现状，再按计划推进。\n\n结束时交一份带证据的报告（用 goal_report：命令与退出码 / 改动的文件 / 勾选清单），没有证据不要声称完成。",
 	}
+}
+
+// decodeResult parses what the tool returned to the model. The contract is JSON,
+// so every assertion about the answer goes through this.
+func decodeResult(t *testing.T, out string) reportResult {
+	t.Helper()
+	var r reportResult
+	if err := json.Unmarshal([]byte(out), &r); err != nil {
+		t.Fatalf("the tool did not answer JSON: %q (%v)", out, err)
+	}
+	return r
 }
 
 // TestGoalReport_PostsTheVerdict is the round trip: the judge's answer and the
@@ -59,8 +70,12 @@ func TestGoalReport_PostsTheVerdict(t *testing.T) {
 	if len(got.Evidence) != 1 || got.Evidence[0].Cmd != "go build ./..." {
 		t.Errorf("evidence lost on the way: %+v", got.Evidence)
 	}
-	if !strings.Contains(out, "met") {
+	res := decodeResult(t, out)
+	if !res.Delivered || res.Verdict != "met" || res.Round != 3 || res.Verify {
 		t.Errorf("the model was not told the verdict: %q", out)
+	}
+	if res.Reason != "tests pass" {
+		t.Errorf("the reason was lost: %q", out)
 	}
 }
 
@@ -174,7 +189,8 @@ func TestGoalReport_SecondCallIsHarmless(t *testing.T) {
 	if posts != 1 || judgements != 1 {
 		t.Fatalf("posts = %d, judgements = %d; want one of each", posts, judgements)
 	}
-	if !strings.Contains(out, "已经提交") {
+	second := decodeResult(t, out)
+	if second.Delivered || !strings.Contains(second.Reason, "已经提交") {
 		t.Errorf("second call answered %q", out)
 	}
 
@@ -254,5 +270,72 @@ func TestGoalReport_SameRoundTwiceIsStillRefused(t *testing.T) {
 	}
 	if posts != 1 {
 		t.Fatalf("a second report in the same round was delivered: posts=%d", posts)
+	}
+}
+
+// TestGoalReport_History is the judge's memory: the earlier rounds the scheduler
+// attached arrive as RECENT, and a round without a reason still appears.
+func TestGoalReport_History(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	var judged string
+	tl := NewGoalReportTool(GoalReportOptions{WorkspaceURL: srv.URL, Token: "t"})
+	gc := judgeGoal()
+	gc.History = []RoundNote{
+		{N: 0, Verdict: "not_yet", Reason: "refresh.go left"},
+		{N: 1, Verdict: "not_yet"},
+	}
+	tl.SetGoalJudge(func(_ context.Context, input string) (string, bool) {
+		judged = input
+		return `{"verdict":"not_yet","reason":"middleware.go left"}`, true
+	})
+	if _, err := tl.Execute(turnCtx(gc, IntakeContext{}), map[string]any{
+		"summary":  "migrated two call sites",
+		"evidence": []any{map[string]any{"kind": "file", "path": "internal/auth/token.go"}},
+	}); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	for _, want := range []string{"RECENT", "round 1: not_yet — refresh.go left", "round 2: not_yet — no reason recorded"} {
+		if !strings.Contains(judged, want) {
+			t.Errorf("the judge input is missing %q:\n%s", want, judged)
+		}
+	}
+	if strings.Contains(judged, "no earlier rounds are included") {
+		t.Errorf("the placeholder survived a round with history:\n%s", judged)
+	}
+}
+
+// TestGoalReport_FirstRoundTellsTheJudgeSo keeps the first round from inventing
+// history: the placeholder is what the prompt calls an empty RECENT block.
+func TestGoalReport_FirstRoundTellsTheJudgeSo(t *testing.T) {
+	input := judgeInput(judgeGoal(), Report{Summary: "looked around"})
+	if !strings.Contains(input, "(no earlier rounds)") {
+		t.Errorf("the first round's RECENT is not marked empty:\n%s", input)
+	}
+}
+
+// TestSplitInstruction_Briefing covers the headings the scheduler writes today:
+// the judge must still receive the condition alone and the constraints as a list.
+func TestSplitInstruction_Briefing(t *testing.T) {
+	cond, cons := splitInstruction(judgeGoal().Instruction)
+	if cond != "所有测试通过" {
+		t.Errorf("condition = %q", cond)
+	}
+	if !strings.Contains(cons, "不改已有测试") || strings.Contains(cons, "结束时") {
+		t.Errorf("constraints = %q", cons)
+	}
+
+	// A briefing without boundaries still yields the condition, not the whole
+	// instruction.
+	noCons := "【长程目标 · 第 2 轮】\n\n目标\nall green\n\n这是第一轮。\n"
+	cond, cons = splitInstruction(noCons)
+	if cond != "all green" {
+		t.Errorf("condition without boundaries = %q", cond)
+	}
+	if cons != "(none)" {
+		t.Errorf("constraints without boundaries = %q", cons)
 	}
 }

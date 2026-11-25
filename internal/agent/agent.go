@@ -405,7 +405,44 @@ func goalContextOf(msg *nanoprotocol.InboundMessage) tool.GoalContext {
 		round = int(v)
 	}
 	verify, _ := msg.Metadata["verify"].(bool)
-	return tool.GoalContext{GoalID: id, Round: round, Verify: verify, Instruction: msg.Content}
+	return tool.GoalContext{
+		GoalID: id, Round: round, Verify: verify,
+		History:     goalHistoryOf(msg.Metadata),
+		Instruction: msg.Content,
+	}
+}
+
+// goalHistoryOf reads the earlier rounds the scheduler attached to a round.
+//
+// The metadata travels as JSON, so the entries arrive as []any of map[string]any
+// and the numbers as float64; an entry that does not have that shape is skipped
+// rather than trusted. A round dispatched before the field existed simply has no
+// history.
+func goalHistoryOf(metadata map[string]any) []tool.RoundNote {
+	raw, ok := metadata["goal_history"].([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]tool.RoundNote, 0, len(raw))
+	for _, item := range raw {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		note := tool.RoundNote{}
+		switch v := m["n"].(type) {
+		case float64:
+			note.N = int(v)
+		case int:
+			note.N = v
+		case int64:
+			note.N = int(v)
+		}
+		note.Verdict, _ = m["verdict"].(string)
+		note.Reason, _ = m["reason"].(string)
+		out = append(out, note)
+	}
+	return out
 }
 
 // scheduledTaskName returns the task name a scheduled run carries ("" for

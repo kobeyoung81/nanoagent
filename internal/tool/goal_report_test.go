@@ -117,10 +117,9 @@ func TestGoalReport_NormalisesTheReport(t *testing.T) {
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
-	for _, want := range []string{"第 4 轮", "not_yet", "four call sites left"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("answer is missing %q:\n%s", want, out)
-		}
+	res := decodeResult(t, out)
+	if !res.Delivered || res.Round != 4 || res.Verdict != "not_yet" || res.Reason != "four call sites left" {
+		t.Errorf("answer = %s, want round 4 / not_yet / the judge's reason", out)
 	}
 	// The judge sees the round's evidence, not the model's summary alone.
 	for _, want := range []string{
